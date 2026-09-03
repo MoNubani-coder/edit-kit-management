@@ -1,0 +1,56 @@
+# =============================================================================
+# Edit Kit Management System - local development stack
+# =============================================================================
+#   docker compose up -d db        # database only (run Next.js on the host)
+#   docker compose --profile app up -d --build   # full stack
+# =============================================================================
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: ekms-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ekms
+      POSTGRES_PASSWORD: ekms_local_dev
+      POSTGRES_DB: ekms
+      # Deterministic collation so ORDER BY behaves identically everywhere.
+      POSTGRES_INITDB_ARGS: '--locale=C --encoding=UTF8'
+    ports:
+      - '5432:5432'
+    volumes:
+      - ekms-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ekms -d ekms']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    # Not started by default - `docker compose up -d db` is the normal dev loop.
+    profiles: ['app']
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: ekms-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: 'postgresql://ekms:ekms_local_dev@db:5432/ekms?schema=public'
+      AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET must be set in .env}
+      AUTH_TRUST_HOST: 'true'
+      APP_TIMEZONE: ${APP_TIMEZONE:-Asia/Dubai}
+      STORAGE_PROVIDER: 'LOCAL'
+      STORAGE_LOCAL_PATH: '/app/storage'
+    ports:
+      - '3000:3000'
+    volumes:
+      # Signed handover evidence. Losing this volume loses the signatures.
+      - ekms-storage:/app/storage
+
+volumes:
+  ekms-db-data:
+  ekms-storage:

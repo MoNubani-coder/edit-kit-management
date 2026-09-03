@@ -1,0 +1,1121 @@
+// =============================================================================
+// Edit Kit Management System - Prisma schema
+// =============================================================================
+// Design rules enforced by this schema:
+//
+//  1. NOTHING about the paper form is hard-coded. Categories, assets,
+//     accessories, kits, software and checklists are all rows, not columns.
+//  2. A completed inspection is an immutable record. Every inspection line
+//     carries a *snapshot* of the identifying data it was signed against, so
+//     later edits to an Asset can never rewrite a signed handover.
+//  3. Handover and Return are two separate Inspection rows on the same
+//     Booking. The return never overwrites the handover.
+//  4. Deletion of reference data is soft (deletedAt) because bookings and
+//     inspections point at it.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Prisma 7: the connection URL lives in prisma.config.ts (for the CLI) and is
+// supplied to PrismaClient through a driver adapter (see src/server/db/prisma.ts).
+datasource db {
+  provider = "postgresql"
+}
+
+// =============================================================================
+// ENUMS
+// =============================================================================
+
+enum UserRole {
+  ADMIN
+  ENGINEER
+  EDITOR
+  VIEWER
+}
+
+enum UserStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+  DISABLED
+}
+
+enum AssetStatus {
+  AVAILABLE
+  RESERVED
+  CHECKED_OUT
+  MAINTENANCE
+  DAMAGED
+  MISSING
+  RETIRED
+}
+
+enum KitStatus {
+  AVAILABLE
+  RESERVED
+  CHECKED_OUT
+  MAINTENANCE
+  DAMAGED
+  RETIRED
+}
+
+/// Condition of the physical suitcase / flight case the kit travels in.
+enum SuitcaseStatus {
+  GOOD
+  MINOR_DAMAGE
+  DAMAGED
+  MISSING
+  NOT_APPLICABLE
+}
+
+enum BookingStatus {
+  DRAFT
+  RESERVED
+  READY_FOR_HANDOVER
+  CHECKED_OUT
+  OVERDUE
+  RETURN_INSPECTION
+  COMPLETED
+  CANCELLED
+}
+
+enum InspectionType {
+  HANDOVER
+  RETURN
+}
+
+enum InspectionStatus {
+  IN_PROGRESS
+  PENDING_SIGNATURES
+  COMPLETED
+  VOIDED
+}
+
+/// Per-item condition recorded during handover and return.
+enum ItemConditionStatus {
+  INCLUDED
+  MISSING
+  DAMAGED
+  NOT_APPLICABLE
+}
+
+enum SoftwareStatus {
+  INSTALLED
+  NOT_INSTALLED
+  LICENSE_ISSUE
+  NEEDS_UPDATE
+  NOT_APPLICABLE
+}
+
+enum ChecklistStatus {
+  PASS
+  FAIL
+  NOT_APPLICABLE
+}
+
+/// Which inspection phase a checklist item applies to.
+enum ChecklistPhase {
+  HANDOVER
+  RETURN
+  BOTH
+}
+
+enum SignatureType {
+  HANDOVER_EDITOR
+  HANDOVER_ENGINEER
+  RETURN_EDITOR
+  RETURN_ENGINEER
+}
+
+enum SignerRole {
+  EDITOR
+  ENGINEER
+}
+
+enum IssueType {
+  MISSING
+  DAMAGED
+  MALFUNCTION
+  OTHER
+}
+
+enum IssueSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum IssueStatus {
+  OPEN
+  UNDER_INVESTIGATION
+  RESOLVED
+  CLOSED
+}
+
+enum AttachmentKind {
+  INSPECTION_PHOTO
+  ISSUE_PHOTO
+  SIGNATURE
+  DOCUMENT
+  GENERATED_PDF
+}
+
+/// Abstracted so local disk can be swapped for Azure Blob without a migration.
+enum StorageProvider {
+  LOCAL
+  AZURE_BLOB
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  RESTORE
+  LOGIN_SUCCESS
+  LOGIN_FAILED
+  LOGOUT
+  PASSWORD_CHANGED
+  ROLE_CHANGED
+  BOOKING_CREATED
+  BOOKING_UPDATED
+  BOOKING_STATUS_CHANGED
+  BOOKING_CANCELLED
+  KIT_ASSIGNED
+  ASSET_STATUS_CHANGED
+  KIT_STATUS_CHANGED
+  HANDOVER_STARTED
+  HANDOVER_COMPLETED
+  RETURN_STARTED
+  RETURN_COMPLETED
+  SIGNATURE_SUBMITTED
+  SIGNATURE_VOIDED
+  INSPECTION_VOIDED
+  ISSUE_CREATED
+  ISSUE_UPDATED
+  ISSUE_RESOLVED
+  ISSUE_CLOSED
+  ADMIN_OVERRIDE
+  EXPORT_GENERATED
+  SETTING_CHANGED
+  FILE_UPLOADED
+  FILE_DELETED
+}
+
+/// Scopes for the atomic human-readable number generator.
+enum NumberScope {
+  BOOKING
+  ASSET
+  ISSUE
+  KIT
+  INSPECTION
+}
+
+// =============================================================================
+// IDENTITY & ACCESS
+// =============================================================================
+
+model User {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  name         String
+  /// Null for federated (Entra ID) accounts. bcrypt (cost 12) for local accounts.
+  passwordHash String?
+  role         UserRole   @default(VIEWER)
+  status       UserStatus @default(INVITED)
+  staffId      String?    @unique
+  phone        String?
+
+  /// Bumped to invalidate every issued JWT for this user (forced sign-out,
+  /// role change, password change). Checked in the Auth.js jwt callback.
+  sessionVersion      Int       @default(0)
+  mustChangePassword  Boolean   @default(false)
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime? @db.Timestamptz(3)
+  lastLoginAt         DateTime? @db.Timestamptz(3)
+
+  deletedAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+
+  accounts Account[]
+  sessions Session[]
+
+  editorProfile   EditorProfile?
+  engineerProfile EngineerProfile?
+
+  // --- Authored / actor relations -------------------------------------------
+  bookingsCreated      Booking[]        @relation("BookingCreatedBy")
+  bookingsUpdated      Booking[]        @relation("BookingUpdatedBy")
+  inspectionsStarted   Inspection[]     @relation("InspectionStartedBy")
+  inspectionsCompleted Inspection[]     @relation("InspectionCompletedBy")
+  inspectionsVoided    Inspection[]     @relation("InspectionVoidedBy")
+  signaturesSigned     Signature[]      @relation("SignatureSigner")
+  signaturesVoided     Signature[]      @relation("SignatureVoidedBy")
+  issuesReported       Issue[]          @relation("IssueReportedBy")
+  issuesAssigned       Issue[]          @relation("IssueAssignedTo")
+  issuesResolved       Issue[]          @relation("IssueResolvedBy")
+  attachmentsUploaded  Attachment[]     @relation("AttachmentUploadedBy")
+  auditLogs            AuditLog[]       @relation("AuditActor")
+  settingsUpdated      AppSetting[]     @relation("SettingUpdatedBy")
+  assetStatusChanges   AssetStatusLog[] @relation("AssetStatusChangedBy")
+
+  @@index([role, status])
+  @@index([deletedAt])
+  @@map("users")
+}
+
+/// Auth.js OAuth account link. Unused in the MVP (credentials only) but present
+/// so Entra ID SSO can be enabled without a schema migration.
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime @db.Timestamptz(3)
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+/// An editor who receives kits. Deliberately decoupled from User: external
+/// freelance editors appear on bookings and sign handovers but often have no
+/// login account.
+model EditorProfile {
+  id            String  @id @default(cuid())
+  userId        String? @unique
+  fullName      String
+  staffId       String? @unique
+  email         String?
+  contactNumber String?
+  department    String?
+  company       String?
+  isExternal    Boolean @default(true)
+  notes         String?
+  isActive      Boolean @default(true)
+
+  deletedAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+
+  user       User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  bookings   Booking[]
+  signatures Signature[] @relation("SignatureEditorProfile")
+
+  @@index([fullName])
+  @@index([isActive, deletedAt])
+  @@index([fullName(ops: raw("gin_trgm_ops"))], type: Gin, map: "editor_profiles_name_trgm")
+  @@index([staffId(ops: raw("gin_trgm_ops"))], type: Gin, map: "editor_profiles_staff_trgm")
+  @@map("editor_profiles")
+}
+
+/// An engineer who performs handover and return inspections. Always internal
+/// staff, therefore always backed by a User account.
+model EngineerProfile {
+  id            String  @id @default(cuid())
+  userId        String  @unique
+  fullName      String
+  staffId       String? @unique
+  email         String?
+  contactNumber String?
+  department    String?
+  isActive      Boolean @default(true)
+
+  deletedAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bookings   Booking[]
+  signatures Signature[] @relation("SignatureEngineerProfile")
+
+  @@index([fullName])
+  @@index([isActive, deletedAt])
+  @@map("engineer_profiles")
+}
+
+// =============================================================================
+// EQUIPMENT CATALOGUE
+// =============================================================================
+
+/// Admin-managed equipment grouping ("Workstation", "Audio Interface", ...).
+/// parentId allows sub-categories later without a migration.
+model EquipmentCategory {
+  id          String  @id @default(cuid())
+  code        String  @unique
+  name        String  @unique
+  description String?
+  /// lucide-react icon name rendered by the UI. Data, not code.
+  icon        String?
+  sortOrder   Int     @default(0)
+  isActive    Boolean @default(true)
+  parentId    String?
+
+  deletedAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+
+  parent   EquipmentCategory?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children EquipmentCategory[] @relation("CategoryTree")
+  assets   Asset[]
+
+  @@index([sortOrder])
+  @@index([parentId])
+  @@map("equipment_categories")
+}
+
+/// Admin-managed catalogue of accessory kinds ("Power Adapter", "HDMI Cable").
+/// Keeps accessory naming consistent and keeps the list out of the codebase.
+model AccessoryType {
+  id          String  @id @default(cuid())
+  code        String  @unique
+  name        String  @unique
+  description String?
+  sortOrder   Int     @default(0)
+  isActive    Boolean @default(true)
+
+  deletedAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+
+  accessories Accessory[]
+
+  @@index([sortOrder])
+  @@map("accessory_types")
+}
+
+/// A serialised, individually tracked piece of equipment.
+model Asset {
+  id           String      @id @default(cuid())
+  assetCode    String      @unique
+  categoryId   String
+  name         String
+  manufacturer String?
+  model        String?
+  serialNumber String?     @unique
+  admBarcode   String?     @unique
+  status       AssetStatus @default(AVAILABLE)
+  condition    String?
+  location     String?
+  purchaseDate DateTime?   @db.Timestamptz(3)
+  warrantyEnd  DateTime?   @db.Timestamptz(3)
+  notes        String?
+
+  deletedAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+
+  category    EquipmentCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  accessories Accessory[]
+  kitAssets   KitAsset[]
+
+  assetInspections AssetInspection[]
+  issues           Issue[]
+  statusLogs       AssetStatusLog[]
+
+  @@index([categoryId])
+  @@index([status])
+  @@index([admBarcode])
+  @@index([serialNumber])
+  @@index([deletedAt])
+  // Trigram indexes for the partial-text path of global search. Declared here
+  // (not only in the migration) so Prisma owns them and does not flag drift.
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "assets_name_trgm")
+  @@index([model(ops: raw("gin_trgm_ops"))], type: Gin, map: "assets_model_trgm")
+  @@index([serialNumber(ops: raw("gin_trgm_ops"))], type: Gin, map: "assets_serial_trgm")
+  @@index([admBarcode(ops: raw("gin_trgm_ops"))], type: Gin, map: "assets_barcode_trgm")
+  @@map("assets")
+}
+
+/// A non-serialised (or lightly serialised) item that travels with an asset:
+/// power adapter, mouse, HDMI cable...
+model Accessory {
+  id              String      @id @default(cuid())
+  assetId         String
+  accessoryTypeId String
+  /// Optional override of the type name, e.g. "USB-C Cable (2m)".
+  label           String?
+  quantity        Int         @default(1)
+  serialNumber    String?
+  admBarcode      String?     @unique
+  status          AssetStatus @default(AVAILABLE)
+  isRequired      Boolean     @default(true)
+  sortOrder       Int         @default(0)
+  notes           String?
+
+  deletedAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+
+  asset         Asset         @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  accessoryType AccessoryType @relation(fields: [accessoryTypeId], references: [id], onDelete: Restrict)
+
+  accessoryInspections AccessoryInspection[]
+  issues               Issue[]
+
+  @@index([assetId, sortOrder])
+  @@index([accessoryTypeId])
+  @@index([admBarcode])
+  @@map("accessories")
+}
+
+/// Append-only trail of asset status transitions. Powers the asset history
+/// timeline without having to parse the generic audit log.
+model AssetStatusLog {
+  id          String       @id @default(cuid())
+  assetId     String
+  fromStatus  AssetStatus?
+  toStatus    AssetStatus
+  reason      String?
+  bookingId   String?
+  changedById String?
+  createdAt   DateTime     @default(now()) @db.Timestamptz(3)
+
+  asset     Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  booking   Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  changedBy User?    @relation("AssetStatusChangedBy", fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@index([assetId, createdAt])
+  @@index([bookingId])
+  @@map("asset_status_logs")
+}
+
+// =============================================================================
+// KITS
+// =============================================================================
+
+/// A kit is a named, barcoded collection of assets ("External MBP Edit - 02").
+/// Its contents are rows in KitAsset, never columns here.
+model Kit {
+  id             String         @id @default(cuid())
+  kitCode        String         @unique
+  name           String
+  description    String?
+  admBarcode     String?        @unique
+  status         KitStatus      @default(AVAILABLE)
+  suitcaseStatus SuitcaseStatus @default(GOOD)
+  location       String?
+  notes          String?
+  isActive       Boolean        @default(true)
+
+  /// Default checklist applied to new bookings for this kit.
+  defaultChecklistTemplateId String?
+
+  deletedAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+
+  defaultChecklistTemplate ChecklistTemplate? @relation(fields: [defaultChecklistTemplateId], references: [id], onDelete: SetNull)
+
+  kitAssets   KitAsset[]
+  kitSoftware KitSoftware[]
+  bookings    Booking[]
+  issues      Issue[]
+
+  @@index([status])
+  @@index([admBarcode])
+  @@index([isActive, deletedAt])
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "kits_name_trgm")
+  @@index([kitCode(ops: raw("gin_trgm_ops"))], type: Gin, map: "kits_code_trgm")
+  @@index([admBarcode(ops: raw("gin_trgm_ops"))], type: Gin, map: "kits_barcode_trgm")
+  @@map("kits")
+}
+
+/// Membership of an asset in a kit. removedAt keeps historical bookings
+/// resolvable after an asset is swapped out of a kit.
+model KitAsset {
+  id         String  @id @default(cuid())
+  kitId      String
+  assetId    String
+  /// Human label for the slot, e.g. "Speaker 1" / "Speaker 2".
+  slotLabel  String?
+  isRequired Boolean @default(true)
+  sortOrder  Int     @default(0)
+
+  addedAt   DateTime  @default(now()) @db.Timestamptz(3)
+  removedAt DateTime? @db.Timestamptz(3)
+
+  kit   Kit   @relation(fields: [kitId], references: [id], onDelete: Cascade)
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Restrict)
+
+  @@unique([kitId, assetId])
+  @@index([kitId, sortOrder])
+  @@index([assetId])
+  @@map("kit_assets")
+}
+
+// =============================================================================
+// SOFTWARE
+// =============================================================================
+
+model SoftwareApplication {
+  id          String  @id @default(cuid())
+  name        String
+  vendor      String?
+  version     String?
+  licenseType String?
+  notes       String?
+  sortOrder   Int     @default(0)
+  isActive    Boolean @default(true)
+
+  deletedAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+
+  kitSoftware    KitSoftware[]
+  softwareChecks SoftwareCheck[]
+
+  @@unique([name, version])
+  @@index([isActive, sortOrder])
+  @@map("software_applications")
+}
+
+/// Software required on a given kit's workstation.
+model KitSoftware {
+  id                    String  @id @default(cuid())
+  kitId                 String
+  softwareApplicationId String
+  isRequired            Boolean @default(true)
+  sortOrder             Int     @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  kit      Kit                 @relation(fields: [kitId], references: [id], onDelete: Cascade)
+  software SoftwareApplication @relation(fields: [softwareApplicationId], references: [id], onDelete: Restrict)
+
+  @@unique([kitId, softwareApplicationId])
+  @@index([kitId, sortOrder])
+  @@map("kit_software")
+}
+
+// =============================================================================
+// CHECKLIST TEMPLATES
+// =============================================================================
+
+model ChecklistTemplate {
+  id          String  @id @default(cuid())
+  name        String  @unique
+  description String?
+  version     Int     @default(1)
+  isDefault   Boolean @default(false)
+  isActive    Boolean @default(true)
+
+  deletedAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+
+  items    ChecklistTemplateItem[]
+  kits     Kit[]
+  bookings Booking[]
+
+  @@index([isActive, isDefault])
+  @@map("checklist_templates")
+}
+
+model ChecklistTemplateItem {
+  id          String         @id @default(cuid())
+  templateId  String
+  label       String
+  description String?
+  phase       ChecklistPhase @default(BOTH)
+  isRequired  Boolean        @default(true)
+  sortOrder   Int            @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  template     ChecklistTemplate      @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  bookingItems BookingChecklistItem[]
+
+  @@index([templateId, sortOrder])
+  @@map("checklist_template_items")
+}
+
+// =============================================================================
+// BOOKINGS
+// =============================================================================
+
+model Booking {
+  id            String        @id @default(cuid())
+  bookingNumber String        @unique
+  kitId         String
+  editorId      String
+  engineerId    String
+  status        BookingStatus @default(DRAFT)
+
+  bookingStart       DateTime  @db.Timestamptz(3)
+  bookingEnd         DateTime  @db.Timestamptz(3)
+  collectionDate     DateTime? @db.Timestamptz(3)
+  expectedReturnDate DateTime  @db.Timestamptz(3)
+  actualReturnDate   DateTime? @db.Timestamptz(3)
+
+  purpose String?
+  notes   String?
+
+  /// Template the checklist snapshot was taken from (informational only;
+  /// the authoritative rows live in BookingChecklistItem).
+  checklistTemplateId String?
+
+  cancelledAt  DateTime? @db.Timestamptz(3)
+  cancelReason String?
+
+  createdById String
+  updatedById String?
+
+  deletedAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+
+  kit               Kit                @relation(fields: [kitId], references: [id], onDelete: Restrict)
+  editor            EditorProfile      @relation(fields: [editorId], references: [id], onDelete: Restrict)
+  engineer          EngineerProfile    @relation(fields: [engineerId], references: [id], onDelete: Restrict)
+  checklistTemplate ChecklistTemplate? @relation(fields: [checklistTemplateId], references: [id], onDelete: SetNull)
+  createdBy         User               @relation("BookingCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy         User?              @relation("BookingUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  inspections     Inspection[]
+  checklistItems  BookingChecklistItem[]
+  signatures      Signature[]
+  issues          Issue[]
+  attachments     Attachment[]
+  assetStatusLogs AssetStatusLog[]
+
+  @@index([kitId, status])
+  @@index([editorId])
+  @@index([engineerId])
+  @@index([status, expectedReturnDate])
+  @@index([bookingStart, bookingEnd])
+  @@index([deletedAt])
+  @@index([bookingNumber(ops: raw("gin_trgm_ops"))], type: Gin, map: "bookings_number_trgm")
+  @@map("bookings")
+}
+
+/// Snapshot of the checklist template taken when the booking is created.
+/// Editing the template afterwards never alters historical bookings.
+model BookingChecklistItem {
+  id                   String         @id @default(cuid())
+  bookingId            String
+  sourceTemplateItemId String?
+  label                String
+  description          String?
+  phase                ChecklistPhase @default(BOTH)
+  isRequired           Boolean        @default(true)
+  sortOrder            Int            @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  booking            Booking                @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  sourceTemplateItem ChecklistTemplateItem? @relation(fields: [sourceTemplateItemId], references: [id], onDelete: SetNull)
+  results            ChecklistResult[]
+
+  @@index([bookingId, sortOrder])
+  @@map("booking_checklist_items")
+}
+
+// =============================================================================
+// INSPECTIONS
+// =============================================================================
+
+/// One inspection per phase per booking. The return inspection is a new row -
+/// it never mutates the handover row.
+model Inspection {
+  id        String           @id @default(cuid())
+  bookingId String
+  type      InspectionType
+  status    InspectionStatus @default(IN_PROGRESS)
+
+  suitcaseStatus SuitcaseStatus @default(GOOD)
+  generalNotes   String?
+
+  startedById String
+  startedAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  completedById String?
+  completedAt   DateTime? @db.Timestamptz(3)
+
+  /// Set when the inspection is completed and both signatures are present.
+  /// A locked inspection is rejected by every normal write path.
+  lockedAt DateTime? @db.Timestamptz(3)
+
+  /// Frozen render-ready copy of the whole document (booking, editor,
+  /// engineer, kit, lines, checklist, software) captured at completion so the
+  /// PDF can always be regenerated exactly as signed.
+  documentSnapshot Json?
+
+  voidedAt   DateTime? @db.Timestamptz(3)
+  voidedById String?
+  voidReason String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  booking     Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  startedBy   User    @relation("InspectionStartedBy", fields: [startedById], references: [id], onDelete: Restrict)
+  completedBy User?   @relation("InspectionCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  voidedBy    User?   @relation("InspectionVoidedBy", fields: [voidedById], references: [id], onDelete: SetNull)
+
+  assetInspections     AssetInspection[]
+  accessoryInspections AccessoryInspection[]
+  softwareChecks       SoftwareCheck[]
+  checklistResults     ChecklistResult[]
+  signatures           Signature[]
+  attachments          Attachment[]
+  issues               Issue[]
+
+  @@index([bookingId, type])
+  @@index([status])
+  @@map("inspections")
+}
+
+/// One line per asset in the kit, per inspection.
+/// The *Snapshot columns freeze what was actually written on the form.
+model AssetInspection {
+  id           String              @id @default(cuid())
+  inspectionId String
+  assetId      String
+  kitAssetId   String?
+  status       ItemConditionStatus @default(INCLUDED)
+  notes        String?
+  sortOrder    Int                 @default(0)
+
+  slotLabelSnapshot    String?
+  assetCodeSnapshot    String
+  categoryNameSnapshot String
+  nameSnapshot         String
+  manufacturerSnapshot String?
+  modelSnapshot        String?
+  serialNumberSnapshot String?
+  admBarcodeSnapshot   String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  inspection Inspection @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  asset      Asset      @relation(fields: [assetId], references: [id], onDelete: Restrict)
+
+  accessoryInspections AccessoryInspection[]
+  attachments          Attachment[]
+
+  @@unique([inspectionId, assetId])
+  @@index([inspectionId, sortOrder])
+  @@index([assetId])
+  @@map("asset_inspections")
+}
+
+/// One line per accessory, nested under its asset line.
+model AccessoryInspection {
+  id                String              @id @default(cuid())
+  inspectionId      String
+  assetInspectionId String
+  accessoryId       String
+  status            ItemConditionStatus @default(INCLUDED)
+  quantityExpected  Int                 @default(1)
+  quantityReceived  Int?
+  notes             String?
+  sortOrder         Int                 @default(0)
+
+  labelSnapshot         String
+  accessoryTypeSnapshot String
+  serialNumberSnapshot  String?
+  admBarcodeSnapshot    String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  inspection      Inspection      @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  assetInspection AssetInspection @relation(fields: [assetInspectionId], references: [id], onDelete: Cascade)
+  accessory       Accessory       @relation(fields: [accessoryId], references: [id], onDelete: Restrict)
+
+  attachments Attachment[]
+
+  @@unique([inspectionId, accessoryId])
+  @@index([assetInspectionId, sortOrder])
+  @@index([accessoryId])
+  @@map("accessory_inspections")
+}
+
+model SoftwareCheck {
+  id                    String         @id @default(cuid())
+  inspectionId          String
+  softwareApplicationId String
+  status                SoftwareStatus @default(INSTALLED)
+  installedVersion      String?
+  notes                 String?
+  sortOrder             Int            @default(0)
+
+  nameSnapshot    String
+  versionSnapshot String?
+  vendorSnapshot  String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  inspection Inspection          @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  software   SoftwareApplication @relation(fields: [softwareApplicationId], references: [id], onDelete: Restrict)
+
+  @@unique([inspectionId, softwareApplicationId])
+  @@index([inspectionId, sortOrder])
+  @@map("software_checks")
+}
+
+/// Answer to one snapshotted checklist row, for one inspection.
+model ChecklistResult {
+  id                     String          @id @default(cuid())
+  inspectionId           String
+  bookingChecklistItemId String
+  status                 ChecklistStatus @default(PASS)
+  notes                  String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  inspection    Inspection           @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  checklistItem BookingChecklistItem @relation(fields: [bookingChecklistItemId], references: [id], onDelete: Cascade)
+
+  @@unique([inspectionId, bookingChecklistItemId])
+  @@index([inspectionId])
+  @@map("checklist_results")
+}
+
+// =============================================================================
+// SIGNATURES
+// =============================================================================
+
+/// Immutable once written. Corrections are made by voiding, never by update.
+model Signature {
+  id           String        @id @default(cuid())
+  bookingId    String
+  inspectionId String
+  type         SignatureType
+  signerRole   SignerRole
+
+  signerUserId            String?
+  signerEditorProfileId   String?
+  signerEngineerProfileId String?
+
+  /// Name/staff id as displayed at signing time.
+  signerName    String
+  signerStaffId String?
+
+  storageProvider StorageProvider @default(LOCAL)
+  imagePath       String
+  imageMimeType   String          @default("image/png")
+  /// SHA-256 of the stored image; lets us prove the file was not swapped.
+  imageHash       String
+
+  signedAt  DateTime @default(now()) @db.Timestamptz(3)
+  ipAddress String?
+  userAgent String?
+
+  voidedAt   DateTime? @db.Timestamptz(3)
+  voidedById String?
+  voidReason String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  booking         Booking          @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  inspection      Inspection       @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  signerUser      User?            @relation("SignatureSigner", fields: [signerUserId], references: [id], onDelete: SetNull)
+  editorProfile   EditorProfile?   @relation("SignatureEditorProfile", fields: [signerEditorProfileId], references: [id], onDelete: SetNull)
+  engineerProfile EngineerProfile? @relation("SignatureEngineerProfile", fields: [signerEngineerProfileId], references: [id], onDelete: SetNull)
+  voidedBy        User?            @relation("SignatureVoidedBy", fields: [voidedById], references: [id], onDelete: SetNull)
+
+  @@index([inspectionId, type])
+  @@index([bookingId])
+  @@map("signatures")
+}
+
+// =============================================================================
+// ISSUES
+// =============================================================================
+
+model Issue {
+  id          String        @id @default(cuid())
+  issueNumber String        @unique
+  type        IssueType
+  severity    IssueSeverity @default(MEDIUM)
+  status      IssueStatus   @default(OPEN)
+
+  title       String
+  description String
+
+  bookingId    String?
+  inspectionId String?
+  kitId        String?
+  assetId      String?
+  accessoryId  String?
+
+  reportedById String
+  reportedAt   DateTime @default(now()) @db.Timestamptz(3)
+  assignedToId String?
+
+  resolution   String?
+  resolvedAt   DateTime? @db.Timestamptz(3)
+  resolvedById String?
+  closedAt     DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  booking    Booking?    @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  inspection Inspection? @relation(fields: [inspectionId], references: [id], onDelete: SetNull)
+  kit        Kit?        @relation(fields: [kitId], references: [id], onDelete: SetNull)
+  asset      Asset?      @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  accessory  Accessory?  @relation(fields: [accessoryId], references: [id], onDelete: SetNull)
+
+  reportedBy User  @relation("IssueReportedBy", fields: [reportedById], references: [id], onDelete: Restrict)
+  assignedTo User? @relation("IssueAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  resolvedBy User? @relation("IssueResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  attachments Attachment[]
+
+  @@index([status, severity])
+  @@index([assetId, status])
+  @@index([bookingId])
+  @@index([kitId])
+  @@index([issueNumber(ops: raw("gin_trgm_ops"))], type: Gin, map: "issues_number_trgm")
+  @@map("issues")
+}
+
+// =============================================================================
+// FILES
+// =============================================================================
+
+/// Typed nullable FKs instead of a stringly-typed polymorphic owner, so the
+/// database keeps referential integrity.
+model Attachment {
+  id        String         @id @default(cuid())
+  kind      AttachmentKind
+  fileName  String
+  mimeType  String
+  sizeBytes Int
+  /// SHA-256 of the stored bytes; used for de-duplication and tamper checks.
+  sha256    String
+
+  storageProvider StorageProvider @default(LOCAL)
+  storagePath     String
+
+  caption String?
+
+  bookingId             String?
+  inspectionId          String?
+  assetInspectionId     String?
+  accessoryInspectionId String?
+  issueId               String?
+
+  uploadedById String?
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
+  deletedAt    DateTime? @db.Timestamptz(3)
+
+  booking             Booking?             @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  inspection          Inspection?          @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  assetInspection     AssetInspection?     @relation(fields: [assetInspectionId], references: [id], onDelete: Cascade)
+  accessoryInspection AccessoryInspection? @relation(fields: [accessoryInspectionId], references: [id], onDelete: Cascade)
+  issue               Issue?               @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  uploadedBy          User?                @relation("AttachmentUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([bookingId])
+  @@index([inspectionId])
+  @@index([issueId])
+  @@index([sha256])
+  @@map("attachments")
+}
+
+// =============================================================================
+// AUDIT & SYSTEM
+// =============================================================================
+
+model AuditLog {
+  id         String      @id @default(cuid())
+  action     AuditAction
+  entityType String
+  entityId   String?
+
+  /// Snapshotted so the log stays readable after a user is deleted.
+  actorUserId String?
+  actorName   String
+  actorRole   UserRole?
+
+  summary       String?
+  previousValue Json?
+  newValue      Json?
+  metadata      Json?
+
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  actor User? @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([action, createdAt])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+/// Atomic source of human-readable numbers (BK-2026-000001, AST-000001,
+/// ISS-2026-000001). Incremented with a row lock inside the same transaction
+/// as the entity it numbers, so gaps and duplicates are impossible.
+model NumberSequence {
+  id      String      @id @default(cuid())
+  scope   NumberScope
+  /// Year for year-scoped counters, "GLOBAL" for continuous ones.
+  period  String
+  current Int         @default(0)
+
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([scope, period])
+  @@map("number_sequences")
+}
+
+/// Runtime-editable application settings (/admin/settings). Values are JSON so
+/// new settings need no migration.
+model AppSetting {
+  key         String  @id
+  value       Json
+  description String?
+  category    String  @default("general")
+
+  updatedById String?
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  updatedBy User? @relation("SettingUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([category])
+  @@map("app_settings")
+}

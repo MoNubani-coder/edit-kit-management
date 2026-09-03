@@ -1,0 +1,157 @@
+# MVP Development Roadmap
+
+Thirteen phases. Each one ends at a state you can actually click through and
+sign off, rather than at "the code compiles".
+
+**Definition of done for every phase:** server-side authorization on every new
+route and action · Zod validation at every trust boundary · loading and empty
+states · audit entries for state changes · `npm run typecheck && npm run lint`
+clean · `DEVELOPMENT.md` updated.
+
+---
+
+## Phase 1 — Architecture and database schema ✅ COMPLETE
+
+Schema, migration, seed, Docker, project skeleton, architecture docs.
+
+**Test:** `docker compose up -d db && npm run db:migrate && npm run db:seed`,
+then `npm run db:studio` and confirm the seeded kit, its 12 assets and their
+accessories.
+
+---
+
+## Phase 2 — Authentication and RBAC
+
+- Auth.js v5 credentials provider, bcrypt (cost 12), account lockout.
+- `sessionVersion` revocation check in the `jwt` callback (AD-2).
+- `proxy.ts` optimistic redirect + per-request CSP nonce.
+- Permission matrix (`server/auth/permissions.ts`) — the single source of truth
+  for all four roles.
+- `requireSession()` / `requirePermission()` / the `action()` wrapper.
+- `/login`, sign-out, session timeout, `/api/health`.
+
+**Test:** each seeded role signs in and is bounced from routes it should not
+reach — including by pasting the URL directly, and by invoking a Server Action
+from the console.
+
+---
+
+## Phase 3 — Application shell and dashboard
+
+- shadcn/ui installed; sidebar + header + breadcrumbs; role-filtered navigation.
+- Shared primitives: `DataTable`, `StatusBadge`, `PageHeader`, `EmptyState`,
+  `ConfirmDialog`, `Stepper`.
+- Dashboard tiles (available / reserved / checked out / overdue / maintenance /
+  open issues) and the four activity panels.
+
+**Test:** tablet width (768–1024 px) is usable, not just narrow desktop.
+
+---
+
+## Phase 4 — Asset management
+
+CRUD for assets and accessories, `AST-NNNNNN` allocation, uniqueness errors
+surfaced as field errors, soft delete, status transitions writing
+`AssetStatusLog`, and the asset history timeline.
+
+**Test:** two assets cannot share a serial number or ADM barcode; a soft-deleted
+asset disappears from pickers but its history survives.
+
+---
+
+## Phase 5 — Kit management
+
+Kit CRUD, contents editor (add/remove/reorder assets, slot labels, required
+flags), kit software, default checklist template, kit status.
+
+**Test:** build "External MBP Edit - 03" end to end from the UI, without
+touching code. This is the phase that proves the central requirement.
+
+---
+
+## Phase 6 — Editor management
+
+Editor profiles including external editors with no login; search by name/staff
+ID; per-editor booking history.
+
+---
+
+## Phase 7 — Booking management
+
+Booking CRUD, `BK-YYYY-NNNNNN`, kit availability calendar, checklist snapshot on
+creation, status transitions, cancellation.
+
+**Test:** two overlapping bookings on one kit are rejected — including when both
+are submitted at the same moment (the exclusion constraint, not a UI check).
+
+---
+
+## Phase 8 — Handover workflow
+
+The seven-step wizard. Auto-loads kit contents into inspection lines, per-item
+status + notes + photos, software check, checklist, review. Optimistic
+concurrency (R-6). Completion transaction: inspection locked, booking
+`CHECKED_OUT`, kit and assets `CHECKED_OUT`, audit written.
+
+**Test:** kill the browser mid-wizard and resume; confirm a completed handover
+cannot be edited; confirm two tablets editing one inspection get a conflict
+dialog rather than silent overwrite.
+
+---
+
+## Phase 9 — Digital signatures
+
+Pointer-events signature pad (mouse, touch, stylus), SHA-256 hashing, IP and
+user-agent capture, authorised file serving, void-don't-delete.
+
+**Test:** sign on an actual tablet with a finger. This is the one feature that
+cannot be validated with a mouse.
+
+---
+
+## Phase 10 — Return workflow
+
+New `RETURN` inspection, side-by-side handover vs return diff with differences
+highlighted, issue prompt on degradation, completion transaction returning
+assets to `AVAILABLE` except those with unresolved issues.
+
+**Test:** mark a mouse `MISSING` on return; confirm the handover inspection is
+untouched, an Issue is offered, and that asset alone stays out of `AVAILABLE`.
+
+---
+
+## Phase 11 — Issue management
+
+`ISS-YYYY-NNNNNN`, issue list and detail, lifecycle, photos, links from asset and
+booking pages.
+
+---
+
+## Phase 12 — Reports and PDF
+
+Report query layer (AD-5) + the ten reports; handover and return PDFs rendered
+from `documentSnapshot` (AD-6); CSV export as the first extra renderer.
+
+**Test:** regenerate a handover PDF *after* renaming the kit and swapping an
+asset's serial number — the PDF must still show what was signed.
+
+---
+
+## Phase 13 — Testing and deployment
+
+Vitest unit tests (numbering, permissions, handover/return completion),
+Testcontainers integration tests proving the DB constraints, Playwright E2E over
+handover → return, production Docker build, backup and restore runbook.
+
+---
+
+## Sequencing notes
+
+- **Phases 4–6 are independent** and can run in parallel across developers.
+- **Phase 8 is the risk concentration.** It is the largest phase, it owns the
+  transactional integrity, and it is where R-4 and R-6 land. Budget accordingly.
+- **Phase 9 before Phase 10.** The return workflow reuses the signature pad.
+- **R-1 (how external editors sign) must be answered before Phase 8 starts.**
+  Everything up to that point is unaffected by the answer.
+- **R-7 (maintenance records) must be answered before Phase 4** if maintenance
+  tracking is in scope — retrofitting it later means migrating asset history.

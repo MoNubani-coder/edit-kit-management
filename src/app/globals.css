@@ -1,0 +1,30 @@
+@import 'tailwindcss';
+
+/*
+ * Design tokens.
+ *
+ * The full enterprise theme (shadcn/ui variables, status badge palette, dark
+ * mode) lands with the application shell in Phase 3. This file currently holds
+ * only what Phase 1 needs to render legibly.
+ *
+ * Note: no dark-mode block. Handover happens on tablets under warehouse
+ * lighting, and a half-finished dark theme reads worse than none. Phase 3
+ * introduces both themes together, deliberately.
+ */
+
+@theme inline {
+  --font-sans: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace;
+}
+
+/* Respect the reduced-motion preference everywhere by default. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
