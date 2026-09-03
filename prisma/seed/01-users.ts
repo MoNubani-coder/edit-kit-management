@@ -1,9 +1,8 @@
 import { randomBytes } from 'node:crypto'
 
 import { PrismaClient, UserRole, UserStatus } from '@prisma/client'
-import { hash } from 'bcryptjs'
 
-const BCRYPT_COST = 12
+import { hashPassword, MIN_PASSWORD_LENGTH } from '../../src/server/auth/password'
 
 export interface SeededCredential {
   role: string
@@ -28,8 +27,8 @@ function resolvePassword(envVar: string): { password: string; generated: boolean
   const fromEnv = process.env[envVar]
 
   if (fromEnv && fromEnv.length > 0) {
-    if (fromEnv.length < 12) {
-      throw new Error(`${envVar} must be at least 12 characters.`)
+    if (fromEnv.length < MIN_PASSWORD_LENGTH) {
+      throw new Error(`${envVar} must be at least ${MIN_PASSWORD_LENGTH} characters.`)
     }
     return { password: fromEnv, generated: false }
   }
@@ -87,7 +86,8 @@ async function ensureUser(prisma: PrismaClient, spec: UserSpec) {
       phone: spec.phone,
       role: spec.role,
       status: UserStatus.ACTIVE,
-      passwordHash: await hash(password, BCRYPT_COST),
+      // Same function the application and the reset script use (bcrypt, cost 12).
+      passwordHash: await hashPassword(password),
     },
     select: { id: true },
   })
@@ -167,6 +167,17 @@ export async function seedUsers(prisma: PrismaClient): Promise<SeededCredential[
       isExternal: false,
     },
   })
+
+  // --- Viewer (read-only management account) ---------------------------------
+  const viewer = await ensureUser(prisma, {
+    emailEnvVar: 'SEED_VIEWER_EMAIL',
+    defaultEmail: 'viewer@example.ae',
+    passwordEnvVar: 'SEED_VIEWER_PASSWORD',
+    name: 'Noura Al Suwaidi',
+    staffId: 'VWR-3301',
+    role: UserRole.VIEWER,
+  })
+  credentials.push(viewer.credential)
 
   // --- External editors (NO login account) -----------------------------------
   // These exercise the case the schema was designed around: a freelance editor

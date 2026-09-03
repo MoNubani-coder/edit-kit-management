@@ -33,6 +33,7 @@ const SCOPE_CONFIG: Record<NumberScope, ScopeConfig> = {
   [NumberScope.ASSET]: { prefix: 'AST', period: 'GLOBAL', padding: 6 },
   [NumberScope.KIT]: { prefix: 'KIT', period: 'GLOBAL', padding: 4 },
   [NumberScope.INSPECTION]: { prefix: 'INS', period: 'YEARLY', padding: 6 },
+  [NumberScope.MAINTENANCE]: { prefix: 'MNT', period: 'YEARLY', padding: 6 },
 }
 
 const GLOBAL_PERIOD = 'GLOBAL'

@@ -1,6 +1,7 @@
 # Edit Kit Management System — Architecture
 
-**Status:** Phase 1 (Architecture & Database Schema) — complete
+**Status:** Phase 2 (Authentication & RBAC) — complete. Phase 1 (schema,
+including the maintenance refinement) — complete.
 **Last updated:** 2026-09-03
 
 ---
@@ -82,6 +83,12 @@ accidentally ship an unauthenticated write path.
 `proxy.ts` (Next.js 16's replacement for `middleware.ts`) does an *optimistic*
 cookie-only check to bounce anonymous users to `/login`. It is a UX
 optimisation, never the security boundary.
+
+As built in Phase 2, the pieces are: `server/auth/session.ts`
+(`getCurrentUser`, `requireAuth`, `requirePermission`), `server/auth/page-guards.ts`
+(the page-flavoured variants that redirect or `forbidden()`), `server/auth/api.ts`
+(`withApiAuth` for route handlers) and `server/auth/action.ts` (the `action()`
+wrapper for Server Actions). Section 11 describes them.
 
 ---
 
@@ -282,13 +289,62 @@ that merges `AssetStatusLog`, `AssetInspection` (joined to `Booking`), `Issue`,
 and `AuditLog` at read time. A separate denormalised history table would be a
 second source of truth that can silently drift from the first.
 
+### 3.6 Maintenance records (R-7 resolved)
+
+`AssetStatus.MAINTENANCE` records *that* an asset is out of service.
+`MaintenanceRecord` records what was done, by whom, when, and what it cost —
+the data the annual calibration report and the cost-per-asset report need.
+
+```mermaid
+erDiagram
+    Asset ||--o{ MaintenanceRecord : "serviced by"
+    Issue |o--o{ MaintenanceRecord : "may be resolved by"
+    User  ||--o{ MaintenanceRecord : "created / performed"
+
+    MaintenanceRecord {
+        string id PK
+        string maintenanceNumber UK "MNT-2026-000001"
+        string assetId FK "required"
+        string issueId FK "optional - the fault it fixes"
+        enum   type "PREVENTIVE|REPAIR|CALIBRATION|SOFTWARE_UPDATE|WARRANTY_SERVICE|OTHER"
+        enum   status "SCHEDULED|IN_PROGRESS|ON_HOLD|COMPLETED|CANCELLED"
+        datetime scheduledFor
+        datetime startedAt
+        datetime completedAt
+        string vendor
+        decimal cost "DECIMAL(12,2)"
+        string currency "ISO 4217, default AED"
+        string outcome
+        datetime deletedAt "soft delete"
+    }
+```
+
+Design points:
+
+- **Linked to `Asset`, never to `Kit`.** Maintenance happens to a serialised
+  item; a kit-level record would hide which monitor was recalibrated. The
+  relation is `onDelete: Restrict` — an asset with service history cannot be
+  hard-deleted (assets are soft-deleted anyway).
+- **`issueId` is optional and `SetNull`.** A repair usually starts from an
+  `Issue` raised at return; a calibration does not. Removing the issue keeps
+  the maintenance history intact.
+- **Only `IN_PROGRESS` takes the asset out of service.** A `SCHEDULED` record
+  is a plan, so the asset stays bookable. The coupling to `AssetStatus` is a
+  service-layer rule governed by the `maintenance.setAssetStatusOnStart`
+  setting — not a trigger, because whether to restore `AVAILABLE` on
+  completion depends on whether an issue is still open.
+- **`MNT-YYYY-NNNNNN` numbering** uses the same locked counter as bookings and
+  issues (AD-1), so seeded and UI-created records form one sequence.
+- **Attachments** (vendor reports, invoices) are deliberately not wired yet;
+  adding `maintenanceRecordId` to `Attachment` is a one-column migration when
+  Phase 4 builds the UI.
+
 ---
 
 ## 4. Guarantees enforced in the database, not in application code
 
-Application-level checks lose races. These four are constraints, so they hold
-even under concurrent requests, and even if someone writes to the database by
-hand.
+Application-level checks lose races. These are constraints, so they hold even
+under concurrent requests, and even if someone writes to the database by hand.
 
 ### 4.1 No overlapping bookings for the same kit
 
@@ -334,9 +390,29 @@ ordinary indexes — left undeclared, it would generate a migration to drop them
 
 ### 4.6 Verified, not assumed
 
-All of §4 is exercised by `scripts/db/verify-constraints.sql` — 18 tests that
-insert violating rows inside a transaction, assert the specific SQLSTATE, and
-roll back. It passed 18/18 against PostgreSQL 16.15 on 2026-09-03.
+All of §4, including the maintenance rules in §4.7, is exercised by
+`scripts/db/verify-constraints.sql` — 30 tests that insert violating rows
+inside a transaction, assert the specific SQLSTATE, and roll back. It passed
+30/30 against PostgreSQL 16.15 on 2026-09-03.
+
+### 4.7 Maintenance lifecycle rules
+
+Added by migration `20260903000200_maintenance_records`, alongside the table.
+
+| Rule | Mechanism |
+|---|---|
+| Work cannot finish before it starts | `CHECK (completedAt IS NULL OR startedAt IS NULL OR completedAt >= startedAt)` |
+| Status and timestamps agree: `COMPLETED` ⇔ `completedAt` set, `CANCELLED` ⇔ `cancelledAt` set, `IN_PROGRESS` ⇒ `startedAt` set | `CHECK` `maintenance_records_status_matches_timestamps` |
+| Cost is never negative | `CHECK (cost IS NULL OR cost >= 0)` |
+| Currency is a three-letter upper-case ISO 4217 code | `CHECK (currency ~ '^[A-Z]{3}$')` |
+| An asset is in at most one workshop at a time | Partial unique index on `(assetId) WHERE deletedAt IS NULL AND status IN ('IN_PROGRESS','ON_HOLD')` |
+| An asset with service history cannot be hard-deleted | FK `ON DELETE RESTRICT` |
+| Removing an issue keeps its repair history | FK `ON DELETE SET NULL` |
+
+Several `SCHEDULED` records per asset are legitimate — annual calibration plus
+a planned repair — so exclusivity applies only to work actually underway. A
+partial index on `scheduledFor` over open records backs the "maintenance due"
+dashboard tile.
 
 ---
 
@@ -349,6 +425,10 @@ Postgres sequences deliberately leak numbers on rollback. Instead
 `NumberSequence` holds `(scope, period, current)` and is incremented with
 `UPDATE … RETURNING` **inside the same transaction** as the row it numbers. If
 the booking insert fails, the number is released.
+
+Scopes: `BK-YYYY-` bookings, `ISS-YYYY-` issues, `INS-YYYY-` inspections and
+`MNT-YYYY-` maintenance reset each January; `AST-` assets and `KIT-` kits run
+continuously.
 
 Cost: writes to the same scope serialise. At a few hundred bookings a year this
 is irrelevant.
@@ -363,6 +443,14 @@ database; a mismatch invalidates the token immediately. Bump it on password
 change, role change, suspension, or "sign out everywhere".
 
 Short `maxAge` (8 h) + `updateAge` (15 min) gives an idle timeout.
+
+*As implemented:* the check runs in the `jwt` callback of the full Auth.js
+instance (`server/auth/auth.ts`), which is what `auth()` uses in Server
+Components, Server Actions and Route Handlers. The proxy uses a lighter
+instance without it - a database round-trip on every prefetch would be wasteful
+and the proxy is optimistic by design (§11.5). Suspending a user or resetting
+their password bumps `sessionVersion`, and their next request ends with a
+cleared cookie.
 
 ### AD-3 — All auth behind a facade
 
@@ -401,6 +489,13 @@ The UI hiding a button is cosmetic. This is wrapped in a single `action()`
 helper so it cannot be forgotten by omission — the helper *requires* a
 permission argument.
 
+*As implemented:* `action({ permission, schema, handler })` in
+`server/auth/action.ts`. `permission` is a `Permission`, a list (any-of) or the
+literal `'authenticated'` - it cannot be omitted. Input is parsed with the Zod
+schema before the handler runs; authorization and validation failures return a
+typed `ActionResult`, never a stack trace. `setUserStatus` is the first action
+built on it.
+
 ### AD-8 — Handover and return run in one transaction
 
 Completing a handover writes: inspection status, `lockedAt`, both signatures,
@@ -413,7 +508,7 @@ it runs inside `prisma.$transaction` with `Serializable` isolation.
 Prisma maps `DateTime` to PostgreSQL `TIMESTAMP(3)` **without time zone** unless
 told otherwise. That type stores a naive wall-clock value and forgets which zone
 it was in — a booking created from a laptop set to London time and read by a
-server in UTC would drift by an hour, silently. All 79 `DateTime` columns carry
+server in UTC would drift by an hour, silently. All 86 `DateTime` columns carry
 `@db.Timestamptz(3)`, which stores an unambiguous instant. This is also what
 makes the `tstzrange` overlap constraint (§4.1) well-defined.
 
@@ -425,6 +520,27 @@ a signed record's content, and `audit_logs` rejects `UPDATE` and `DELETE`
 outright. A future code path — or a hand-run `psql` session — cannot quietly
 edit what an editor signed for. This is what "immutable/audited signed records"
 in the security requirements actually means at the storage layer.
+
+### AD-11 — Permissions, not roles, are the authorization API
+
+Application code never asks "is this an ADMIN?". It asks
+`can(actor, 'kit.manage')`. Roles are rows in one table
+(`server/auth/permissions.ts`) that maps each role to a set of named
+permissions. Adding a capability means adding a permission and granting it;
+no `if (role === ...)` is scattered through pages or actions. The matrix is
+plain data, so it is unit-tested exhaustively and can be rendered on an admin
+page. A role the matrix does not know grants nothing (fail closed).
+
+### AD-12 — Wrong password and unknown account are indistinguishable
+
+The credentials check hashes against a decoy when there is no account (or no
+local password), so timing does not reveal existence, and both cases return the
+same `invalid_credentials`. Only a *correct* password unlocks the more helpful
+answers - "account disabled", "temporarily locked" - because a correct password
+already proves the caller controls the account. Failed attempts are audited and
+counted; the account locks after `MAX_LOGIN_ATTEMPTS` for
+`LOGIN_LOCKOUT_MINUTES`, and a per-address / per-account sliding-window rate
+limiter sits in front of the whole thing.
 
 ---
 
@@ -441,13 +557,17 @@ edit-kit-management/
 ├─ prisma/
 │  ├─ schema.prisma
 │  ├─ migrations/
+│  │  ├─ 20260903000000_init/
+│  │  ├─ 20260903000100_integrity_constraints_and_search_indexes/
+│  │  └─ 20260903000200_maintenance_records/
 │  └─ seed/
 │     ├─ index.ts                   # orchestrator
 │     ├─ 01-users.ts
-│     ├─ 02-catalogue.ts            # categories, accessory types, software
+│     ├─ 02-catalogue.ts            # categories, accessory types, software, settings
 │     ├─ 03-assets.ts
 │     ├─ 04-checklists.ts
-│     └─ 05-kits.ts                 # depends on 03 and 04
+│     ├─ 05-kits.ts                 # depends on 03 and 04
+│     └─ 06-maintenance.ts          # depends on 01 and 03
 ├─ src/
 │  ├─ app/
 │  │  ├─ (auth)/login/page.tsx
@@ -475,21 +595,36 @@ edit-kit-management/
 │  │  └─ common/                    # StatusBadge, DataTable, EmptyState,
 │  │                                # ConfirmDialog, PageHeader, Stepper
 │  ├─ features/                     # one folder per bounded context
+│  │  ├─ auth/components/login-form.tsx   # Phase 2
 │  │  ├─ bookings/  kits/  assets/  editors/  issues/
 │  │  ├─ inspections/               # the wizard lives here
 │  │  ├─ signatures/                # SignaturePad
 │  │  └─ dashboard/  reports/  admin/
 │  │
+│  ├─ proxy.ts                      # optimistic auth gate + CSP nonce (Phase 2)
 │  ├─ server/                       # never reachable from the client bundle
 │  │  ├─ db/prisma.ts               # singleton
-│  │  ├─ auth/                      # config, session, permissions, actor
-│  │  ├─ dal/                       # authorised reads
-│  │  ├─ actions/                   # server actions (authz + zod + service)
+│  │  ├─ auth/                      # Phase 2 - the whole auth facade (AD-3)
+│  │  │  ├─ auth.config.ts          #   proxy-safe Auth.js config, jwt/session callbacks
+│  │  │  ├─ auth.ts                 #   NextAuth instance: Credentials provider, revocation
+│  │  │  ├─ credentials.ts          #   verifyCredentials: lockout, audit, anti-enumeration
+│  │  │  ├─ password.ts             #   bcrypt cost 12 (the only place bcrypt is called)
+│  │  │  ├─ permissions.ts          #   the permission matrix + can()
+│  │  │  ├─ session.ts              #   getCurrentUser, requireAuth, requirePermission
+│  │  │  ├─ page-guards.ts          #   redirect / forbidden() variants for pages
+│  │  │  ├─ api.ts                  #   withApiAuth for route handlers
+│  │  │  ├─ action.ts               #   action() wrapper for Server Actions (AD-7)
+│  │  │  ├─ route-policy.ts         #   public / authenticated / permission per path
+│  │  │  ├─ rate-limit.ts           #   LoginRateLimiter seam + in-memory default
+│  │  │  └─ errors.ts               #   UnauthorizedError / ForbiddenError
+│  │  ├─ dal/                       # authorised reads (bookings.dal.ts scopes EDITOR)
+│  │  ├─ actions/                   # server actions (auth.actions.ts, admin-users.actions.ts)
 │  │  ├─ services/                  # business logic, transaction-aware
 │  │  │  ├─ booking.service.ts
 │  │  │  ├─ handover.service.ts
 │  │  │  ├─ return.service.ts
 │  │  │  ├─ issue.service.ts
+│  │  │  ├─ maintenance.service.ts
 │  │  │  ├─ audit.service.ts
 │  │  │  └─ numbering.service.ts
 │  │  ├─ reports/                   # report definitions + renderers
@@ -502,9 +637,15 @@ edit-kit-management/
 │  │  ├─ constants/                 # status labels, colours, nav definition
 │  │  └─ utils/
 │  └─ types/
+├─ tests/                           # Vitest (Phase 2)
+│  ├─ unit/                         #   permissions, route policy, validation, rate limit, token callbacks
+│  ├─ integration/                  #   credentials, session, revocation, actions, booking scope, proxy
+│  └─ helpers/                      #   test users, rollback transactions, real session cookies
+├─ scripts/auth/reset-password.ts   # break-glass password reset (revokes sessions)
 ├─ .env.example
 ├─ docker-compose.yml
 ├─ prisma.config.ts
+├─ vitest.config.mts
 └─ DEVELOPMENT.md
 ```
 
@@ -572,13 +713,15 @@ each other. Needs optimistic concurrency (compare `updatedAt` on save, reject
 with a conflict dialog). Scheduled for Phase 8 — flagging it now because it is
 easy to forget until it corrupts a real handover.
 
-### R-7 — No Maintenance entity, but maintenance is in scope
+### R-7 — No Maintenance entity, but maintenance is in scope — *resolved*
 
-`AssetStatus.MAINTENANCE` exists and the asset history is supposed to show
-"Maintenance", but no maintenance entity was requested. `AssetStatusLog` records
-*that* an asset went into maintenance, not what was done, by whom, or the cost.
-If maintenance tracking is actually needed, a `MaintenanceRecord` entity should
-be added before Phase 4 rather than retrofitted.
+`AssetStatus.MAINTENANCE` existed and the asset history was supposed to show
+"Maintenance", but no maintenance entity was requested, and `AssetStatusLog`
+records only *that* an asset went into maintenance. Resolved in Phase 1 by
+adding `MaintenanceRecord` (§3.6) with its own numbering scope, lifecycle
+constraints (§4.7), seed data and constraint tests — before Phase 4, so no
+asset history ever needs migrating. The UI lands with asset management in
+Phase 4.
 
 ### R-8 — Signature and photo retention
 
@@ -587,11 +730,13 @@ storage in a container also loses files on redeploy unless a volume is mounted �
 the compose file mounts one, but the production deployment must too. Azure Blob
 should land before any real volume of handovers accumulates.
 
-### R-9 — `next-auth@5` is still beta
+### R-9 — `next-auth@5` is still beta — *accepted, contained*
 
-`5.0.0-beta.32` is what Auth.js ships for the App Router, and it declares
-support for Next 16. It is nonetheless a beta in a production system. Contained
-by AD-3 (auth facade) — swapping to Better Auth would touch one folder.
+`5.0.0-beta.32` is now in use (Phase 2). It declares support for Next 16 and
+behaved as documented in every test, but it is a beta in a production system.
+Contained by AD-3: the rest of the application imports only
+`getCurrentUser` / `require*` / `action()` from `server/auth`, so swapping the
+library would touch one folder. Watch the Auth.js release notes before go-live.
 
 ### R-10 — Prisma's `latest` npm tag is currently an RC (8.0.0-rc.12) — *mitigated*
 
@@ -638,20 +783,24 @@ None are implemented. Each has a defined seam so it does not require rework:
 
 ## 9. Security posture
 
-| Control | Implementation |
-|---|---|
-| Authentication | Auth.js v5, credentials + Argon-grade bcrypt cost 12, account lockout after N failures |
-| Session revocation | `User.sessionVersion` compared on every JWT decode (AD-2) |
-| Authorization | Permission matrix in `server/auth/permissions.ts`; enforced in DAL + every action |
-| Data scoping | EDITOR sees only own bookings — enforced in the DAL query, not the UI |
-| Input validation | Zod at every trust boundary; the same schema drives React Hook Form |
-| CSRF | Auth.js built-in token for auth routes; Server Actions are origin-checked by Next.js |
-| SQL injection | Prisma parameterised queries only; the two raw statements are DDL in migrations |
-| File uploads | Extension + MIME sniff + size cap + random stored filename + served through an authorised route, never statically |
-| Transport | `secure` cookies, HSTS, CSP set in `next.config.ts`; TLS terminated at the proxy |
-| Immutability | `lockedAt` checks + void-don't-delete on signatures and inspections |
-| Auditability | `AuditLog` with before/after JSON on every state change and every admin override |
-| Least disclosure | DAL returns DTOs; `passwordHash` never leaves the server layer |
+| Control | Implementation | Status |
+|---|---|---|
+| Authentication | Auth.js v5 (`5.0.0-beta.32`) Credentials provider over `verifyCredentials`; bcrypt cost 12 via `bcryptjs`; lockout after `MAX_LOGIN_ATTEMPTS` (5) for `LOGIN_LOCKOUT_MINUTES` (15) | Built (Phase 2) |
+| Brute force / enumeration | Per-address and per-account sliding-window rate limiter in `authorize`; decoy hash comparison; identical answer for unknown account and wrong password (AD-12) | Built (Phase 2) |
+| Session | Stateless JWT, encrypted (JWE) with `AUTH_SECRET`, `httpOnly`, `SameSite=Lax`, `Secure` over HTTPS; sliding cookie (`updateAge` 15 min) under an absolute 8 h cap stamped at sign-in | Built (Phase 2) |
+| Session revocation | `User.sessionVersion` + status re-checked against the database on every `auth()` call (AD-2); bumped on suspend and password reset | Built (Phase 2) |
+| Authorization | Permission matrix in `server/auth/permissions.ts` (AD-11); `requirePermission` in pages, route handlers and the `action()` wrapper; role always read from the database, never from the client | Built (Phase 2) |
+| Data scoping | EDITOR sees only own bookings — a `where` clause derived from the actor in `server/dal/bookings.dal.ts`, not a UI filter | Built (Phase 2) |
+| Route protection | `proxy.ts` optimistic cookie check (redirect / 401 JSON / 403) + authoritative per-page and per-handler checks | Built (Phase 2) |
+| Input validation | Zod at every trust boundary; the login schema is shared client + server | Built (Phase 2) |
+| CSRF | Auth.js double-submit token on its routes; Server Actions are origin-checked by Next.js; sign-out is a POST action, never a link | Built (Phase 2) |
+| Content Security Policy | Per-request nonce issued by `proxy.ts`: `script-src 'self' 'nonce-…' 'strict-dynamic'`, `frame-ancestors 'none'`, `form-action 'self'`, `object-src 'none'`; styles allow inline (React style attributes) | Built (Phase 2) |
+| Other headers | `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, `Permissions-Policy`, HSTS in production (`next.config.ts`) | Built (Phase 1) |
+| SQL injection | Prisma parameterised queries only; the raw statements are DDL in migrations and the numbering upsert | Built (Phase 1) |
+| Auditability | `AuditLog` rows for LOGIN_SUCCESS / LOGIN_FAILED / LOGOUT / PASSWORD_CHANGED and every status change, with IP and user agent | Built (Phase 2) |
+| Least disclosure | `getCurrentUser` returns an `Actor` DTO; `passwordHash` never leaves `server/auth`; the session carries id, name, email, role only | Built (Phase 2) |
+| File uploads | Extension + MIME sniff + size cap + random stored filename + served through an authorised route, never statically | Planned (Phase 8/9) |
+| Immutability | `lockedAt` checks + void-don't-delete on signatures and inspections; database triggers (AD-10) | Triggers built (Phase 1); service checks Phase 8 |
 
 ---
 
@@ -668,3 +817,174 @@ None are implemented. Each has a defined seam so it does not require rework:
 
 The layering exists largely to make the first bullet possible: business rules
 that live inside React components cannot be tested this way.
+
+Phase 2 started this early: the auth suite (86 tests in 11 files) runs
+under Vitest against the local PostgreSQL database - real bcrypt, real rows,
+real encrypted session cookies through the real proxy. See §11.8.
+
+---
+
+## 11. Authentication and authorization (Phase 2)
+
+### 11.1 Shape
+
+```
+ Browser ──POST form──▶ signInAction ──▶ Auth.js signIn('credentials')
+                                            │
+                                            ▼
+                               Credentials.authorize()
+                                 rate limiter ─▶ verifyCredentials() ─▶ audit
+                                            │  (bcrypt compare, lockout, status)
+                                            ▼
+                               jwt callback (sign-in): sub, role, sessionVersion,
+                                                       authenticatedAt
+                                            ▼
+                               encrypted cookie  authjs.session-token  (httpOnly)
+
+ Every later request:
+   proxy.ts      decode cookie ─▶ route policy ─▶ redirect / 401 / 403 / pass
+   page/action   auth() ─▶ jwt callback re-checks DB (status, sessionVersion)
+                 getCurrentUser() ─▶ Actor from DB ─▶ requirePermission()
+```
+
+Everything auth-related lives in `src/server/auth/` (AD-3). The application
+imports only `getCurrentUser`, `requireAuth`, `requirePermission`,
+`requireRole`, `requireAdmin`, the page/API/action wrappers, `can()` and the
+`Permission` type.
+
+### 11.2 Session strategy
+
+- **Stateless JWT**, forced by Auth.js when a Credentials provider is used.
+  The cookie is a JWE encrypted with `AUTH_SECRET`; rotating the secret signs
+  everyone out.
+- **Contents:** `sub` (user id), `name`, `email`, `role`, `sessionVersion`,
+  `authenticatedAt`. The session object handed to the application is exactly
+  `{ id, name, email, role }`.
+- **Lifetime:** cookie slides with activity (`SESSION_UPDATE_AGE_SECONDS`, 15
+  min) but the `jwt` callback returns `null` - ending the session - once
+  `authenticatedAt` is older than `SESSION_MAX_AGE_SECONDS` (8 h). Sliding
+  alone would let a session live forever.
+- **Revocation (AD-2):** on every session read the full instance re-loads the
+  user row; not ACTIVE, deleted, or `sessionVersion` mismatch ⇒ `null` ⇒
+  cookie cleared. Suspension and password reset both bump the version.
+- **Cookie flags:** `httpOnly`, `SameSite=Lax`, `Secure` (and the
+  `__Secure-` prefix) whenever the request is HTTPS. Auth.js derives this from
+  `x-forwarded-proto`, which the corporate reverse proxy must forward.
+
+### 11.3 Passwords
+
+bcrypt, cost 12, through `bcryptjs` (pure JS - no native build on Alpine or on
+developer laptops). `server/auth/password.ts` is the only module that calls
+bcrypt; the seed, the reset script and the credentials check all use it. The
+cost lives inside each hash, so it can be raised later without a migration.
+Argon2id remains the alternative if a native dependency ever becomes
+acceptable.
+
+### 11.4 RBAC design and permission matrix
+
+Roles: `ADMIN`, `ENGINEER`, `EDITOR`, `VIEWER` (the `UserRole` enum). External
+editors have an `EditorProfile` and no `User`; they never authenticate, they
+sign in person on the engineer's tablet (R-1, assumed).
+
+| Permission | ADMIN | ENGINEER | EDITOR | VIEWER |
+|---|:-:|:-:|:-:|:-:|
+| dashboard.view | ✓ | ✓ | ✓ | ✓ |
+| booking.create | ✓ | ✓ | | |
+| booking.read | ✓ | ✓ | | ✓ |
+| booking.readOwn | ✓ | | ✓ | |
+| booking.update | ✓ | ✓ | | |
+| booking.cancel | ✓ | ✓ | | |
+| booking.signOwn | ✓ | | ✓ | |
+| handover.perform / handover.complete | ✓ | ✓ | | |
+| return.perform / return.complete | ✓ | ✓ | | |
+| kit.read | ✓ | ✓ | | ✓ |
+| kit.manage | ✓ | | | |
+| asset.read | ✓ | ✓ | | ✓ |
+| asset.manage | ✓ | | | |
+| editor.read | ✓ | ✓ | | |
+| editor.manage | ✓ | | | |
+| issue.read / issue.create / issue.manage | ✓ | ✓ | | |
+| report.read | ✓ | ✓ | | ✓ |
+| maintenance.read | ✓ | ✓ | | |
+| maintenance.manage | ✓ | | | |
+| admin.users.manage · admin.categories.manage · admin.software.manage · admin.checklists.manage · admin.audit.read · admin.settings.manage | ✓ | | | |
+
+Notes on the edges of the brief:
+
+- ENGINEER holds `booking.cancel` (cancelling a reservation before handover
+  is routine store work) but not `editor.manage`, `kit.manage`,
+  `asset.manage` or `maintenance.manage`. Any of these is a one-line change.
+- EDITOR's `booking.readOwn` is a *permission to see some bookings*; which
+  ones is decided in the DAL from `actor.editorProfileId`. An EDITOR without a
+  profile sees none. Object-level misses return "not found", never "forbidden",
+  so a guessed id reveals nothing.
+- VIEWER has no mutating permission at all; the unit suite asserts that
+  structurally (every VIEWER permission is a read).
+
+### 11.5 Route protection
+
+Three layers, each independent:
+
+1. **`src/proxy.ts`** (optimistic). Decodes the cookie with a database-free
+   Auth.js instance and applies `route-policy.ts`: `/login`, `/api/health` and
+   `/api/auth/*` are public; everything else needs a session; `/admin/*` needs
+   the section's `admin.*` permission. Anonymous → `307 /login?callbackUrl=…`
+   (pages) or `401` JSON (`/api/*`); signed-in but not permitted → rewrite to
+   the 403 page with status 403 (pages) or `403` JSON; signed-in on `/login`
+   → `/dashboard`. It also mints the CSP nonce.
+2. **Pages** call `requirePermissionForPage(…)` (or `requireAuthForPage`)
+   first thing. These read the actor from the database, redirect to `/login`
+   without a session and call Next's `forbidden()` without permission, which
+   renders `forbidden.tsx` with a real 403.
+3. **Route handlers** use `withApiAuth(permission, handler)` → 401/403 JSON.
+   **Server Actions** use `action({ permission, schema, handler })` → typed
+   result. Both derive the actor from the session + database and ignore
+   anything the client claims about its role.
+
+Unauthenticated and forbidden are always distinguished: 401/redirect for the
+former, 403 for the latter; 404 for routes that do not exist.
+
+### 11.6 Login flow and error handling
+
+`signInAction` validates with Zod, calls Auth.js `signIn`, and maps the
+`CredentialsSignin` code to copy: `invalid_credentials` → "Incorrect email or
+password."; `account_disabled` → "This account is not active…";
+`account_locked` → "…temporarily locked…"; `rate_limited` → "Too many sign-in
+attempts…". The disabled and locked messages are only ever produced after a
+correct password (AD-12). On success Auth.js redirects to the validated
+`callbackUrl` (same-origin path, never `/login`) or `/dashboard`.
+
+### 11.7 Future Entra ID integration point
+
+Add a Microsoft Entra ID provider to the `providers` array in
+`server/auth/auth.ts` and map the directory's group/app-role claim to
+`UserRole` in the `jwt` callback (or, better, look the user up by email and
+take the role from the `users` row so administrators keep control). The
+`Account` table already exists for the adapter, `User.passwordHash` is nullable
+for SSO-only accounts, and `revalidateToken` applies unchanged. No page, action
+or DAL function changes.
+
+### 11.8 What is tested
+
+Unit: the permission matrix (per role, and "VIEWER never mutates"), route
+classification and decisions, redirect-path safety, the login schema, the rate
+limiter, the `jwt`/`session` callbacks. Integration (real database):
+`verifyCredentials` for valid, wrong-password, unknown, disabled, locked and
+SSO-only accounts inside rolled-back transactions; password storage is bcrypt
+for every account in the database; `getCurrentUser` / `require*` with a stubbed
+Auth.js session; `revalidateToken` for suspend and version bump; the
+`setUserStatus` Server Action as anonymous, ENGINEER, forged-role ENGINEER and
+ADMIN; EDITOR booking scoping; and the proxy driven with genuine encrypted
+cookies for every route class.
+
+### 11.9 Known limits and decisions carried forward
+
+- The rate limiter is in-process. Behind more than one container, provide a
+  shared `LoginRateLimiter` (Redis or a Postgres table) - the interface exists.
+- No MFA, no password-change or "sign out everywhere" UI yet
+  (`mustChangePassword` and `sessionVersion` are ready for both).
+- `forbidden()` returns a true 403 because the guards run before streaming;
+  if a page later moves its check inside `<Suspense>`, the status becomes 200
+  with the 403 body (the proxy still answers 403 for `/admin/*`).
+- `unauthorized()` / `forbidden()` are behind Next's experimental
+  `authInterrupts` flag.

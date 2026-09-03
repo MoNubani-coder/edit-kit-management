@@ -122,6 +122,19 @@ export async function seedSettings(prisma: PrismaClient) {
       category: 'inspections',
       description: 'Offer to raise an Issue when a returned item degrades from its handover condition.',
     },
+    {
+      key: 'maintenance.defaultCurrency',
+      value: 'AED',
+      category: 'maintenance',
+      description: 'ISO 4217 currency code pre-filled on maintenance cost entries.',
+    },
+    {
+      key: 'maintenance.setAssetStatusOnStart',
+      value: true,
+      category: 'maintenance',
+      description:
+        'When a maintenance record moves to IN_PROGRESS, set the asset status to MAINTENANCE; restore it to AVAILABLE on completion unless an issue remains open.',
+    },
   ]
 
   for (const setting of settings) {

@@ -20,7 +20,7 @@ accessories.
 
 ---
 
-## Phase 2 — Authentication and RBAC
+## Phase 2 — Authentication and RBAC ✅ COMPLETE
 
 - Auth.js v5 credentials provider, bcrypt (cost 12), account lockout.
 - `sessionVersion` revocation check in the `jwt` callback (AD-2).
@@ -52,7 +52,8 @@ from the console.
 
 CRUD for assets and accessories, `AST-NNNNNN` allocation, uniqueness errors
 surfaced as field errors, soft delete, status transitions writing
-`AssetStatusLog`, and the asset history timeline.
+`AssetStatusLog`, maintenance records (`MNT-YYYY-NNNNNN`) against an asset, and
+the asset history timeline.
 
 **Test:** two assets cannot share a serial number or ADM barcode; a soft-deleted
 asset disappears from pickers but its history survives.
@@ -153,5 +154,6 @@ handover → return, production Docker build, backup and restore runbook.
 - **Phase 9 before Phase 10.** The return workflow reuses the signature pad.
 - **R-1 (how external editors sign) must be answered before Phase 8 starts.**
   Everything up to that point is unaffected by the answer.
-- **R-7 (maintenance records) must be answered before Phase 4** if maintenance
-  tracking is in scope — retrofitting it later means migrating asset history.
+- **R-7 (maintenance records) is resolved.** `MaintenanceRecord` landed in the
+  Phase 1 maintenance refinement, so Phase 4 builds the maintenance UI over an
+  existing, constraint-tested table instead of retrofitting one.

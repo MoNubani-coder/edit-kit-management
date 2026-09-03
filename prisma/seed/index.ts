@@ -8,6 +8,7 @@ import { seedCatalogue, seedSettings } from './02-catalogue'
 import { seedAssets } from './03-assets'
 import { seedChecklists } from './04-checklists'
 import { seedKits } from './05-kits'
+import { seedMaintenance } from './06-maintenance'
 
 /**
  * Seed orchestrator.
@@ -51,7 +52,7 @@ async function main() {
   console.log('Seeding Edit Kit Management System...\n')
 
   const credentials = await seedUsers(prisma)
-  console.log(`  users .............. ${credentials.length} accounts + 2 external editor profiles`)
+  console.log(`  users .............. ${credentials.length} accounts (ADMIN, ENGINEER, EDITOR, VIEWER) + 2 external editor profiles`)
 
   const catalogue = await seedCatalogue(prisma)
   console.log(
@@ -69,6 +70,9 @@ async function main() {
 
   const kit = await seedKits(prisma, checklist.templateId)
   console.log(`  kits ............... 1 kit (MBP-02) with ${kit.assets} assets and ${kit.software} applications`)
+
+  const maintenance = await seedMaintenance(prisma)
+  console.log(`  maintenance ........ ${maintenance.created} created (${maintenance.total} total)`)
 
   // Credentials are printed once, here, and never stored anywhere readable.
   const generated = credentials.filter((credential) => credential.generated)

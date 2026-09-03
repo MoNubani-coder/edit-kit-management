@@ -6,8 +6,8 @@ import type { NextConfig } from 'next'
  * Static security headers.
  *
  * Content-Security-Policy is deliberately NOT set here: a strict policy for the
- * App Router needs a per-request nonce, which has to come from `proxy.ts`.
- * That lands with authentication in Phase 2 (see docs/ARCHITECTURE.md, section 9).
+ * App Router needs a per-request nonce, so it is issued by `src/proxy.ts` on
+ * every request (see docs/ARCHITECTURE.md, section 9).
  */
 const securityHeaders = [
   // This app is never meant to be framed. Clickjacking on a handover
@@ -43,6 +43,10 @@ const nextConfig: NextConfig = {
 
   // Fail the production build on a type error rather than shipping it.
   typescript: { ignoreBuildErrors: false },
+
+  // forbidden() / unauthorized() and the forbidden.tsx / unauthorized.tsx
+  // boundaries used by the page guards (src/server/auth/page-guards.ts).
+  experimental: { authInterrupts: true },
 
   // Keep Prisma's query engine out of the bundler's dependency graph.
   serverExternalPackages: ['@prisma/client', 'prisma'],

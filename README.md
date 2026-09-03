@@ -22,8 +22,13 @@ npm install
 npm run db:up                 # PostgreSQL via Docker Compose
 npm run db:migrate
 npm run db:seed               # prints the sign-in accounts once
-npm run dev                   # http://localhost:3000
+npm run dev                   # http://localhost:3000 -> /login
 ```
+
+The seed creates four accounts (`admin`, `engineer`, `editor`, `viewer`
+`@example.ae`). Set `SEED_*_PASSWORD` in `.env` before seeding to choose their
+passwords, otherwise random ones are generated and printed once. Forgot one?
+`npm run auth:reset-password -- admin@example.ae`.
 
 Requires Node.js ≥ 22.12 (LTS). Prisma 7 will not install on odd-numbered
 (non-LTS) Node releases.
@@ -42,7 +47,9 @@ Requires Node.js ≥ 22.12 (LTS). Prisma 7 will not install on odd-numbered
 |---|---|
 | `npm run dev` | Development server |
 | `npm run check` | Typecheck + lint |
+| `npm run test` | Vitest: unit + database integration suites (needs the local database) |
 | `npm run build` | Production build (standalone output) |
+| `npm run auth:reset-password -- <email>` | Reset a local account's password; revokes its sessions |
 | `npm run db:migrate` | Apply migrations (dev) |
 | `npm run db:migrate:deploy` | Apply migrations (production) |
 | `npm run db:seed` | Idempotent seed |
@@ -51,5 +58,6 @@ Requires Node.js ≥ 22.12 (LTS). Prisma 7 will not install on odd-numbered
 
 ## Project status
 
-**Phase 1 of 13 — Architecture and database schema.** See
-[DEVELOPMENT.md](DEVELOPMENT.md).
+**Phase 2 of 13 — Authentication and RBAC — complete.** Sign-in, sessions,
+the permission matrix and route protection are in place; Phase 3 (application
+shell and dashboard) is next. See [DEVELOPMENT.md](DEVELOPMENT.md).

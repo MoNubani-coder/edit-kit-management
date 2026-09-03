@@ -1,9 +1,10 @@
 -- =============================================================================
 -- Database integrity verification
 -- =============================================================================
--- Proves that the constraints in migration
--- 20260903000100_integrity_constraints_and_search_indexes actually reject what
--- they are supposed to reject. Run against a migrated + seeded database:
+-- Proves that the constraints in migrations
+-- 20260903000100_integrity_constraints_and_search_indexes and
+-- 20260903000200_maintenance_records actually reject what they are supposed to
+-- reject. Run against a migrated + seeded database:
 --
 --   psql "$DATABASE_URL" -f scripts/db/verify-constraints.sql
 --
@@ -33,14 +34,15 @@ SELECT
   (SELECT id FROM editor_profiles WHERE "staffId" = 'EXT-5001')                     AS editor_id,
   (SELECT id FROM engineer_profiles LIMIT 1)                                        AS engineer_id,
   (SELECT id FROM users           WHERE role = 'ADMIN' LIMIT 1)                     AS admin_id,
-  (SELECT id FROM assets          WHERE "serialNumber" = 'SN-DEMO-MBP02-0001')      AS asset_id;
+  (SELECT id FROM assets          WHERE "serialNumber" = 'SN-DEMO-MBP02-0001')      AS asset_id,
+  (SELECT "categoryId" FROM assets WHERE "serialNumber" = 'SN-DEMO-MBP02-0001')     AS category_id;
 
 DO $$
 DECLARE f fx%ROWTYPE;
 BEGIN
   SELECT * INTO f FROM fx;
   IF f.kit_id IS NULL OR f.editor_id IS NULL OR f.engineer_id IS NULL
-     OR f.admin_id IS NULL OR f.asset_id IS NULL THEN
+     OR f.admin_id IS NULL OR f.asset_id IS NULL OR f.category_id IS NULL THEN
     RAISE EXCEPTION 'Seed data missing - run `npm run db:seed` first.';
   END IF;
 END $$;
@@ -322,11 +324,38 @@ END $$;
 
 
 -- -----------------------------------------------------------------------------
+-- Test 8b: the MAINTENANCE numbering scope exists and increments
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE first_val int; second_val int;
+BEGIN
+  INSERT INTO number_sequences (id, scope, period, current, "updatedAt")
+  VALUES (gen_random_uuid()::text, 'MAINTENANCE', 'TEST', 1, now())
+  ON CONFLICT (scope, period) DO UPDATE SET current = number_sequences.current + 1, "updatedAt" = now()
+  RETURNING current INTO first_val;
+
+  INSERT INTO number_sequences (id, scope, period, current, "updatedAt")
+  VALUES (gen_random_uuid()::text, 'MAINTENANCE', 'TEST', 1, now())
+  ON CONFLICT (scope, period) DO UPDATE SET current = number_sequences.current + 1, "updatedAt" = now()
+  RETURNING current INTO second_val;
+
+  IF first_val = 1 AND second_val = 2 THEN
+    INSERT INTO results (test, status, detail)
+    VALUES ('8b. MAINTENANCE scope increments 1 -> 2', 'PASS', 'NumberScope.MAINTENANCE accepted by number_sequences');
+  ELSE
+    INSERT INTO results (test, status, detail)
+    VALUES ('8b. MAINTENANCE scope increments 1 -> 2', 'FAIL', format('got %s then %s', first_val, second_val));
+  END IF;
+END $$;
+
+
+-- -----------------------------------------------------------------------------
 -- Test 9: seed sanity
 -- -----------------------------------------------------------------------------
 DO $$
 DECLARE
   kit_assets_n int; assets_n int; ext_editors_n int; real_serials_n int; gaps int;
+  maint_n int; maint_bad_n int; maint_scheduled_ok bool;
 BEGIN
   SELECT count(*) INTO kit_assets_n FROM kit_assets ka JOIN kits k ON k.id = ka."kitId" WHERE k."kitCode" = 'MBP-02';
   SELECT count(*) INTO assets_n FROM assets;
@@ -338,6 +367,20 @@ BEGIN
     SELECT substring("assetCode" FROM 5)::int AS n FROM assets
   ) s WHERE n > assets_n;
 
+  -- every maintenance number must follow the MNT-YYYY-NNNNNN format
+  SELECT count(*), count(*) FILTER (WHERE "maintenanceNumber" !~ '^MNT-\d{4}-\d{6}$')
+    INTO maint_n, maint_bad_n
+  FROM maintenance_records;
+
+  -- the seeded calibration is SCHEDULED, so its asset must still be bookable
+  SELECT (m.status = 'SCHEDULED' AND a.status = 'AVAILABLE')
+    INTO maint_scheduled_ok
+  FROM maintenance_records m
+  JOIN assets a ON a.id = m."assetId"
+  WHERE a."serialNumber" = 'SN-DEMO-MBP02-0009' AND m."deletedAt" IS NULL
+  ORDER BY m."createdAt"
+  LIMIT 1;
+
   INSERT INTO results (test, status, detail) VALUES
     ('9a. Kit MBP-02 has 12 assets',
       CASE WHEN kit_assets_n = 12 THEN 'PASS' ELSE 'FAIL' END, format('%s kit_assets rows', kit_assets_n)),
@@ -346,7 +389,158 @@ BEGIN
     ('9c. No real-looking serial numbers',
       CASE WHEN real_serials_n = 0 THEN 'PASS' ELSE 'FAIL' END, format('%s serials not prefixed SN-DEMO-', real_serials_n)),
     ('9d. Asset codes contiguous from AST-000001',
-      CASE WHEN gaps = 0 THEN 'PASS' ELSE 'FAIL' END, format('%s assets, %s codes above range', assets_n, gaps));
+      CASE WHEN gaps = 0 THEN 'PASS' ELSE 'FAIL' END, format('%s assets, %s codes above range', assets_n, gaps)),
+    ('9e. Maintenance numbers are MNT-YYYY-NNNNNN',
+      CASE WHEN maint_n >= 1 AND maint_bad_n = 0 THEN 'PASS' ELSE 'FAIL' END, format('%s records, %s malformed', maint_n, maint_bad_n)),
+    ('9f. Seeded calibration is SCHEDULED, asset still AVAILABLE',
+      CASE WHEN maint_scheduled_ok THEN 'PASS' ELSE 'FAIL' END, 'a scheduled record must not take the asset out of service');
+END $$;
+
+
+-- -----------------------------------------------------------------------------
+-- Test 10: maintenance records
+-- -----------------------------------------------------------------------------
+-- Uses a fresh asset: every seeded asset belongs to MBP-02, so a delete would
+-- trip the kit_assets FK before ever reaching the maintenance one.
+DO $$
+DECLARE f fx%ROWTYPE;
+BEGIN
+  SELECT * INTO f FROM fx;
+
+  INSERT INTO assets (id, "assetCode", "categoryId", name, "updatedAt")
+  VALUES ('t10-asset', 'AST-TEST01', f.category_id, 'Constraint Test Asset', now());
+
+  -- 10a. completed before it started
+  BEGIN
+    INSERT INTO maintenance_records (id, "maintenanceNumber", "assetId", type, status, title,
+                                     "startedAt", "completedAt", "createdById", "updatedAt")
+    VALUES ('t10-a', 'MNT-TEST-000001', 't10-asset', 'REPAIR', 'COMPLETED', 'reversed dates',
+            '2030-01-10T10:00:00Z', '2030-01-01T10:00:00Z', f.admin_id, now());
+
+    INSERT INTO results (test, status, detail)
+    VALUES ('10a. Maintenance completed before it started rejected', 'FAIL', 'completedAt < startedAt was accepted');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO results (test, status, detail)
+    VALUES ('10a. Maintenance completed before it started rejected', 'PASS', SQLERRM);
+  END;
+
+  -- 10b. COMPLETED without a completion date
+  BEGIN
+    INSERT INTO maintenance_records (id, "maintenanceNumber", "assetId", type, status, title, "createdById", "updatedAt")
+    VALUES ('t10-b', 'MNT-TEST-000002', 't10-asset', 'REPAIR', 'COMPLETED', 'no completedAt', f.admin_id, now());
+
+    INSERT INTO results (test, status, detail)
+    VALUES ('10b. COMPLETED without completedAt rejected', 'FAIL', 'COMPLETED with NULL completedAt was accepted');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO results (test, status, detail)
+    VALUES ('10b. COMPLETED without completedAt rejected', 'PASS', SQLERRM);
+  END;
+
+  -- 10c. IN_PROGRESS without a start date
+  BEGIN
+    INSERT INTO maintenance_records (id, "maintenanceNumber", "assetId", type, status, title, "createdById", "updatedAt")
+    VALUES ('t10-c', 'MNT-TEST-000003', 't10-asset', 'REPAIR', 'IN_PROGRESS', 'no startedAt', f.admin_id, now());
+
+    INSERT INTO results (test, status, detail)
+    VALUES ('10c. IN_PROGRESS without startedAt rejected', 'FAIL', 'IN_PROGRESS with NULL startedAt was accepted');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO results (test, status, detail)
+    VALUES ('10c. IN_PROGRESS without startedAt rejected', 'PASS', SQLERRM);
+  END;
+
+  -- 10d. negative cost
+  BEGIN
+    INSERT INTO maintenance_records (id, "maintenanceNumber", "assetId", type, status, title, cost, "createdById", "updatedAt")
+    VALUES ('t10-d', 'MNT-TEST-000004', 't10-asset', 'REPAIR', 'SCHEDULED', 'negative cost', -1.00, f.admin_id, now());
+
+    INSERT INTO results (test, status, detail)
+    VALUES ('10d. Negative maintenance cost rejected', 'FAIL', 'cost = -1.00 was accepted');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO results (test, status, detail)
+    VALUES ('10d. Negative maintenance cost rejected', 'PASS', SQLERRM);
+  END;
+
+  -- 10e. currency must be an upper-case ISO 4217 code
+  BEGIN
+    INSERT INTO maintenance_records (id, "maintenanceNumber", "assetId", type, status, title, currency, "createdById", "updatedAt")
+    VALUES ('t10-e', 'MNT-TEST-000005', 't10-asset', 'REPAIR', 'SCHEDULED', 'bad currency', 'aed', f.admin_id, now());
+
+    INSERT INTO results (test, status, detail)
+    VALUES ('10e. Lower-case currency code rejected', 'FAIL', 'currency = aed was accepted');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO results (test, status, detail)
+    VALUES ('10e. Lower-case currency code rejected', 'PASS', SQLERRM);
+  END;
+
+  -- 10f / 10g. one actively-underway record per asset; further SCHEDULED ones are fine
+  INSERT INTO maintenance_records (id, "maintenanceNumber", "assetId", type, status, title, "startedAt", "createdById", "updatedAt")
+  VALUES ('t10-f1', 'MNT-TEST-000006', 't10-asset', 'REPAIR', 'IN_PROGRESS', 'first repair', now(), f.admin_id, now());
+
+  BEGIN
+    INSERT INTO maintenance_records (id, "maintenanceNumber", "assetId", type, status, title, "startedAt", "createdById", "updatedAt")
+    VALUES ('t10-f2', 'MNT-TEST-000007', 't10-asset', 'CALIBRATION', 'IN_PROGRESS', 'second, concurrent', now(), f.admin_id, now());
+
+    INSERT INTO results (test, status, detail)
+    VALUES ('10f. Second IN_PROGRESS maintenance on one asset rejected', 'FAIL', 'two live IN_PROGRESS records on one asset accepted');
+  EXCEPTION WHEN unique_violation THEN
+    INSERT INTO results (test, status, detail)
+    VALUES ('10f. Second IN_PROGRESS maintenance on one asset rejected', 'PASS', SQLERRM);
+  END;
+
+  BEGIN
+    INSERT INTO maintenance_records (id, "maintenanceNumber", "assetId", type, status, title, "scheduledFor", "createdById", "updatedAt")
+    VALUES ('t10-g', 'MNT-TEST-000008', 't10-asset', 'CALIBRATION', 'SCHEDULED', 'planned for later', now() + interval '30 days', f.admin_id, now());
+
+    INSERT INTO results (test, status, detail)
+    VALUES ('10g. SCHEDULED maintenance alongside IN_PROGRESS allowed', 'PASS', 'only actively-underway records are exclusive');
+  EXCEPTION WHEN OTHERS THEN
+    INSERT INTO results (test, status, detail)
+    VALUES ('10g. SCHEDULED maintenance alongside IN_PROGRESS allowed', 'FAIL', SQLERRM);
+  END;
+
+  -- 10h. an asset with maintenance history cannot be hard-deleted
+  BEGIN
+    DELETE FROM assets WHERE id = 't10-asset';
+
+    INSERT INTO results (test, status, detail)
+    VALUES ('10h. Asset with maintenance history cannot be deleted', 'FAIL', 'asset row deleted despite maintenance_records');
+  EXCEPTION WHEN foreign_key_violation THEN
+    INSERT INTO results (test, status, detail)
+    VALUES ('10h. Asset with maintenance history cannot be deleted', 'PASS', SQLERRM);
+  END;
+END $$;
+
+
+-- -----------------------------------------------------------------------------
+-- Test 10i: the optional Issue link is nulled, not cascaded, when the issue goes
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE f fx%ROWTYPE; linked text; remaining int;
+BEGIN
+  SELECT * INTO f FROM fx;
+
+  INSERT INTO issues (id, "issueNumber", type, title, description, "assetId", "reportedById", "updatedAt")
+  VALUES ('t10-issue', 'ISS-TEST-000001', 'MALFUNCTION', 'Flickering panel', 'Backlight flickers after warm-up',
+          't10-asset', f.admin_id, now());
+
+  INSERT INTO maintenance_records (id, "maintenanceNumber", "assetId", "issueId", type, status, title,
+                                   "scheduledFor", "createdById", "updatedAt")
+  VALUES ('t10-i', 'MNT-TEST-000009', 't10-asset', 't10-issue', 'REPAIR', 'SCHEDULED', 'Backlight repair',
+          now() + interval '7 days', f.admin_id, now());
+
+  SELECT "issueId" INTO linked FROM maintenance_records WHERE id = 't10-i';
+
+  DELETE FROM issues WHERE id = 't10-issue';
+
+  SELECT count(*) INTO remaining FROM maintenance_records WHERE id = 't10-i' AND "issueId" IS NULL;
+
+  IF linked = 't10-issue' AND remaining = 1 THEN
+    INSERT INTO results (test, status, detail)
+    VALUES ('10i. Maintenance survives removal of its linked issue', 'PASS', 'issueId set to NULL, record retained (ON DELETE SET NULL)');
+  ELSE
+    INSERT INTO results (test, status, detail)
+    VALUES ('10i. Maintenance survives removal of its linked issue', 'FAIL', format('linked=%s remaining=%s', linked, remaining));
+  END IF;
 END $$;
 
 

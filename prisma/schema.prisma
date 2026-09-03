@@ -155,6 +155,26 @@ enum IssueStatus {
   CLOSED
 }
 
+/// Kind of work carried out on an asset.
+enum MaintenanceType {
+  PREVENTIVE
+  REPAIR
+  CALIBRATION
+  SOFTWARE_UPDATE
+  WARRANTY_SERVICE
+  OTHER
+}
+
+/// Lifecycle of a MaintenanceRecord. Only IN_PROGRESS takes the asset out of
+/// service; a SCHEDULED record leaves it bookable.
+enum MaintenanceStatus {
+  SCHEDULED
+  IN_PROGRESS
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
 enum AttachmentKind {
   INSPECTION_PHOTO
   ISSUE_PHOTO
@@ -197,6 +217,9 @@ enum AuditAction {
   ISSUE_UPDATED
   ISSUE_RESOLVED
   ISSUE_CLOSED
+  MAINTENANCE_CREATED
+  MAINTENANCE_UPDATED
+  MAINTENANCE_STATUS_CHANGED
   ADMIN_OVERRIDE
   EXPORT_GENERATED
   SETTING_CHANGED
@@ -211,6 +234,7 @@ enum NumberScope {
   ISSUE
   KIT
   INSPECTION
+  MAINTENANCE
 }
 
 // =============================================================================
@@ -247,20 +271,23 @@ model User {
   engineerProfile EngineerProfile?
 
   // --- Authored / actor relations -------------------------------------------
-  bookingsCreated      Booking[]        @relation("BookingCreatedBy")
-  bookingsUpdated      Booking[]        @relation("BookingUpdatedBy")
-  inspectionsStarted   Inspection[]     @relation("InspectionStartedBy")
-  inspectionsCompleted Inspection[]     @relation("InspectionCompletedBy")
-  inspectionsVoided    Inspection[]     @relation("InspectionVoidedBy")
-  signaturesSigned     Signature[]      @relation("SignatureSigner")
-  signaturesVoided     Signature[]      @relation("SignatureVoidedBy")
-  issuesReported       Issue[]          @relation("IssueReportedBy")
-  issuesAssigned       Issue[]          @relation("IssueAssignedTo")
-  issuesResolved       Issue[]          @relation("IssueResolvedBy")
-  attachmentsUploaded  Attachment[]     @relation("AttachmentUploadedBy")
-  auditLogs            AuditLog[]       @relation("AuditActor")
-  settingsUpdated      AppSetting[]     @relation("SettingUpdatedBy")
-  assetStatusChanges   AssetStatusLog[] @relation("AssetStatusChangedBy")
+  bookingsCreated      Booking[]           @relation("BookingCreatedBy")
+  bookingsUpdated      Booking[]           @relation("BookingUpdatedBy")
+  inspectionsStarted   Inspection[]        @relation("InspectionStartedBy")
+  inspectionsCompleted Inspection[]        @relation("InspectionCompletedBy")
+  inspectionsVoided    Inspection[]        @relation("InspectionVoidedBy")
+  signaturesSigned     Signature[]         @relation("SignatureSigner")
+  signaturesVoided     Signature[]         @relation("SignatureVoidedBy")
+  issuesReported       Issue[]             @relation("IssueReportedBy")
+  issuesAssigned       Issue[]             @relation("IssueAssignedTo")
+  issuesResolved       Issue[]             @relation("IssueResolvedBy")
+  attachmentsUploaded  Attachment[]        @relation("AttachmentUploadedBy")
+  auditLogs            AuditLog[]          @relation("AuditActor")
+  settingsUpdated      AppSetting[]        @relation("SettingUpdatedBy")
+  assetStatusChanges   AssetStatusLog[]    @relation("AssetStatusChangedBy")
+  maintenanceCreated   MaintenanceRecord[] @relation("MaintenanceCreatedBy")
+  maintenanceUpdated   MaintenanceRecord[] @relation("MaintenanceUpdatedBy")
+  maintenancePerformed MaintenanceRecord[] @relation("MaintenancePerformedBy")
 
   @@index([role, status])
   @@index([deletedAt])
@@ -442,9 +469,10 @@ model Asset {
   accessories Accessory[]
   kitAssets   KitAsset[]
 
-  assetInspections AssetInspection[]
-  issues           Issue[]
-  statusLogs       AssetStatusLog[]
+  assetInspections   AssetInspection[]
+  issues             Issue[]
+  statusLogs         AssetStatusLog[]
+  maintenanceRecords MaintenanceRecord[]
 
   @@index([categoryId])
   @@index([status])
@@ -1000,7 +1028,8 @@ model Issue {
   assignedTo User? @relation("IssueAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
   resolvedBy User? @relation("IssueResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
 
-  attachments Attachment[]
+  attachments        Attachment[]
+  maintenanceRecords MaintenanceRecord[]
 
   @@index([status, severity])
   @@index([assetId, status])
@@ -1008,6 +1037,73 @@ model Issue {
   @@index([kitId])
   @@index([issueNumber(ops: raw("gin_trgm_ops"))], type: Gin, map: "issues_number_trgm")
   @@map("issues")
+}
+
+// =============================================================================
+// MAINTENANCE
+// =============================================================================
+
+/// Work carried out on an asset: calibration, repair, firmware, preventive
+/// service. Resolves R-7: `AssetStatusLog` records *that* an asset went into
+/// maintenance; this records what was done, by whom, and what it cost.
+///
+/// Lifecycle: SCHEDULED -> IN_PROGRESS (<-> ON_HOLD) -> COMPLETED, or
+/// CANCELLED from any open state. Only IN_PROGRESS takes the asset out of
+/// service (see the `maintenance.setAssetStatusOnStart` setting); a SCHEDULED
+/// record leaves the asset bookable.
+model MaintenanceRecord {
+  id                String            @id @default(cuid())
+  maintenanceNumber String            @unique
+  assetId           String
+  /// The fault report this work resolves, when there is one.
+  issueId           String?
+  type              MaintenanceType
+  status            MaintenanceStatus @default(SCHEDULED)
+
+  title       String
+  description String?
+
+  scheduledFor DateTime? @db.Timestamptz(3)
+  startedAt    DateTime? @db.Timestamptz(3)
+  completedAt  DateTime? @db.Timestamptz(3)
+
+  /// External service provider, when the work is outsourced.
+  vendor          String?
+  /// Vendor job / RMA / invoice reference.
+  vendorReference String?
+  cost            Decimal? @db.Decimal(12, 2)
+  /// ISO 4217 code. The UI pre-fills it from `maintenance.defaultCurrency`.
+  currency        String   @default("AED") @db.VarChar(3)
+
+  /// What was found and what was done. Written at completion.
+  outcome String?
+
+  /// Engineer who carried out or supervised the work.
+  performedById String?
+
+  cancelledAt  DateTime? @db.Timestamptz(3)
+  cancelReason String?
+
+  createdById String
+  updatedById String?
+
+  deletedAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+
+  asset       Asset  @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  issue       Issue? @relation(fields: [issueId], references: [id], onDelete: SetNull)
+  performedBy User?  @relation("MaintenancePerformedBy", fields: [performedById], references: [id], onDelete: SetNull)
+  createdBy   User   @relation("MaintenanceCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy   User?  @relation("MaintenanceUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([assetId, status])
+  @@index([issueId])
+  @@index([status, scheduledFor])
+  @@index([performedById])
+  @@index([deletedAt])
+  @@index([maintenanceNumber(ops: raw("gin_trgm_ops"))], type: Gin, map: "maintenance_records_number_trgm")
+  @@map("maintenance_records")
 }
 
 // =============================================================================
