@@ -2,12 +2,12 @@
 
 Running log of what exists, what to test, and what comes next.
 
-- **Current phase:** 4 of 13 — Equipment / asset management — ✅ **complete**
-- **Status:** verified against PostgreSQL 16.15 — three migrations applied, zero
-  drift (no schema change was needed), 30/30 database constraint tests,
-  138/138 Vitest tests, HTTP smoke test of the built app, typecheck + lint
-  clean, production build clean
-- **Last updated:** 2026-09-05 (Phase 4)
+- **Current phase:** 5 of 13 — Kit management — ✅ **complete**
+- **Status:** verified against PostgreSQL 16.15 — four migrations applied, zero
+  drift, 30/30 database constraint tests, 174/174 Vitest tests (two consecutive
+  runs, database and numbering counters unchanged), typecheck + lint clean,
+  production build clean
+- **Last updated:** 2026-09-05 (Phase 5)
 
 Companion documents: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (design and
 rationale) · [docs/ROADMAP.md](docs/ROADMAP.md) (all 13 phases).
@@ -110,7 +110,7 @@ once.
 ### 3. Migrate and seed
 
 ```powershell
-npm run db:migrate     # applies all three migrations
+npm run db:migrate     # applies all four migrations
 npm run db:seed        # idempotent - safe to re-run
 npm run dev
 ```
@@ -696,18 +696,139 @@ AD-16. User-facing name: **Equipment**. Routes: `/assets`, `/assets/new`,
 
 ---
 
-## Next: Phase 5 — Kit management
+## Phase 5 — Kit management (complete)
 
-Kit CRUD, contents editor (add / remove / reorder assets, slot labels, required
-flags), kit software, default checklist template, kit status - all on the
-top-navigation shell with the Kits status tabs already in place. Uses
-`isAvailableForUse` from the equipment service before adding an asset to a kit,
-and the "one active kit per asset" constraint from Phase 1.
+Kits on the top-navigation shell: the list workspace, the kit workspace with
+Overview / Equipment / Software / Checklist / History tabs, create and edit,
+and the equipment composition editor with server-side assignment rules and a
+single availability calculation. Design in
+[docs/ARCHITECTURE.md §14](docs/ARCHITECTURE.md#14-kits-phase-5).
 
-**Open decisions for Phase 5**
+**What exists**
 
-- Whether ENGINEER may manage kits (`kit.manage`) or only ADMIN — the matrix
-  currently says ADMIN only.
+- Migration `20260905134441_kit_audit_actions` - five new `AuditAction` values
+  (`KIT_ASSET_ADDED`, `KIT_ASSET_REMOVED`, `KIT_SOFTWARE_ADDED`,
+  `KIT_SOFTWARE_REMOVED`, `KIT_CHECKLIST_CHANGED`). Nothing else in the schema
+  changed: `KitAsset.isRequired` already existed, so no required / optional
+  migration was needed.
+- `src/lib/validation/kits.ts` - kit, membership, software, checklist and
+  list-parameter schemas; kit-code pattern (`MBP-03`, `WIN-01`, `AUDIO-01`).
+- `src/server/dal/kits.dal.ts` - paginated list with search into kit contents,
+  status counts, barcode lookup, availability facts, detail (members grouped
+  with accessories, software, checklist, live booking), lifecycle context,
+  membership lookups, equipment candidate search, history.
+  `catalogue.dal.ts` gained software-application and checklist-template
+  readers.
+- `src/server/services/kits.service.ts` - lifecycle (`allowedKitStatusTransitions`,
+  `kitRemovalBlocker`, `kitAcceptsMembersBlocker`, `memberRemovalBlocker`),
+  assignment rules (`assetAssignmentBlocker`, `translateKitAssetError`),
+  availability (`evaluateKitAvailability`, `getKitAvailability`), and the
+  mutations `createKit`, `updateKit`, `removeKit`, `addKitAsset`,
+  `updateKitAsset`, `removeKitAsset`, `addKitSoftware`, `removeKitSoftware`,
+  `setKitChecklistTemplate`; page loaders.
+- `src/server/actions/kits.actions.ts`, `kit-composition.actions.ts` - all
+  `kit.manage`, all through `action()`.
+- Pages: `/kits`, `/kits/new`, `/kits/[id]` (tabs), `/kits/[id]/edit`.
+- `src/features/kits/` - `hrefs.ts`; components: toolbar, table, form,
+  availability badge and notice, overview, equipment panel (grouped by
+  category, accessories expandable), asset picker (barcode-friendly),
+  member / software / checklist forms, history. `src/components/common/timeline.tsx`
+  is the shared timeline; `KitStatusBadge` joined `status-badge.tsx`. Phase 4
+  kit links now open the kit workspace.
+- Tests: `tests/integration/kits.service.test.ts`,
+  `tests/integration/kits.actions.test.ts`.
+
+**Verification — Phase 5 (2026-09-05)**
+
+| Check | Result |
+|---|---|
+| `npm test` run 1 (18 files) | ✅ **174 / 174** |
+| `npm test` run 2 (18 files) | ✅ **174 / 174** |
+| Database after both runs | ✅ ASSET counter 14 before and after; 1 kit, 12 assets, 0 test kits / assets / users / bookings / maintenance rows; 0 kit audit rows |
+| `scripts/db/verify-constraints.sql` | ✅ 30 / 30 PASS, rolled back |
+| `prisma migrate status` | ✅ 4 migrations, up to date |
+| `prisma migrate diff --exit-code` | ✅ No difference detected |
+| `npm run check` | ✅ clean |
+| `npm run build` | ✅ clean, all kit routes compiled |
+
+**What the 36 kit tests prove** (`npm test`; every write inside a rolled-back
+transaction, so the AST numbers the fixtures consume are returned):
+
+*Rules* — a kit cannot be created twice with one code; RESERVED / CHECKED_OUT
+cannot be chosen by hand; RETIRED and removal need an empty, unbooked kit;
+only available, maintenance-free, unassigned equipment can join; the same
+equipment twice, equipment in another kit (named), checked-out, reserved,
+retired, missing, damaged and removed equipment are all refused; a retired kit
+and a kit under handover / checkout accept nothing and release nothing;
+equipment held by a booking cannot leave its kit; the database settles a race
+for one asset and the operator gets a sentence, not a stack trace.
+
+*Availability* — ready when every required member is available; not ready
+with the blocking asset, slot and reason identified; optional problems are
+warnings; maintenance in progress or on hold blocks even while the asset's
+status still reads available; reserved and checked-out kits report their
+booking and editor.
+
+*Configuration and history* — software added, refused as duplicate, removed,
+all audited; checklist assigned, unchanged assignment is a no-op, cleared,
+unknown template refused; history is newest first, membership events appear
+once whether or not they were audited, seeded MBP-02 shows twelve additions.
+
+*Authorisation* — anonymous rejected; VIEWER and ENGINEER read; EDITOR 403;
+only ADMIN creates, edits, adds equipment, software or a checklist; every
+mutation redirects on success and returns a typed result on failure; no read
+exposes emails, ids or credentials.
+
+**Decisions taken in Phase 5**
+
+| Decision | Reason |
+|---|---|
+| Kit codes are typed, not allocated (`MBP-02`, `WIN-01`, `AUDIO-01`) | They are printed on the cases and quoted by name; `NumberScope.KIT` stays unused |
+| Kit status is stored; readiness is computed (AD-17) | "Available" as a status says what the operator decided; "Ready" says what the equipment allows - both are shown, neither pretends to be the other |
+| Only AVAILABLE equipment with no active maintenance joins a kit | A kit is issued as a working whole; DAMAGED / MISSING items would only make it not ready |
+| Contents freeze from `READY_FOR_HANDOVER` through `RETURN_INSPECTION`, not while merely `RESERVED` | The handover document is signed against the contents; a reservation is not |
+| Re-adding equipment to the same kit reactivates the composite row | `kit_assets_kitId_assetId_key` allows one row per pair; the audit entries carry every join and leave |
+| Kit software rows are hard-deleted | Handover software checks reference the application, not the row; audit keeps the history |
+| Kit removal needs an empty kit | Otherwise the assets would stay "in a kit" that no longer exists |
+| ENGINEER still has `kit.read` only | Unchanged from the matrix; revisit if engineers are to compose kits |
+| No camera scanning | Keyboard scanners submit the GET picker form with Enter |
+
+**Manual browser checks worth doing**
+
+- [ ] `/kits` at 1366×768 and tablet: status tabs with counts, search box,
+  the MBP-02 row showing 12 items / 11 required and "Ready"; both themes.
+- [ ] Scan or type `ADM-DEMO-KIT-0002` → lands on MBP-02; type `ADM-DEMO-100009`
+  → MBP-02 listed through its broadcast monitor.
+- [ ] MBP-02 › Equipment: categories in seed order, the laptop stand marked
+  Optional, "5 accessories" on the MacBook expands; Software lists Premiere Pro
+  and Media Encoder; Checklist shows the Standard Edit Kit Checklist (12).
+- [ ] As ADMIN: create `MBP-03` from `/kits/new`, open Equipment › Add
+  equipment, scan a barcode of an item in MBP-02 → "is in kit MBP-02. Remove it
+  there first."; add a free asset → Ready; mark one required item DAMAGED from
+  the equipment workspace → kit shows "Not ready · 1" with the asset named.
+- [ ] Edit: status choices exclude Reserved / Checked out; Retired is offered
+  only once the kit is empty; the reason appears in History.
+- [ ] As VIEWER: no New kit / Edit / Add buttons; as EDITOR: `/kits` is 403.
+
+**Development-database note**
+
+`number_sequences` for `ASSET` reads 14 while the highest code is
+`AST-000012`. Two numbers were consumed by test runs before the Phase 4
+suites were isolated; the counter is left as is (development only, and
+`npm run db:reset` removes it). Production code does not compensate for it.
+
+---
+
+## Next: Phase 6 — Editor management
+
+Editor profiles including external editors with no login; search by name and
+staff ID; per-editor booking history - on the top-navigation shell with the
+Editors tab already in place.
+
+**Open decisions carried forward**
+
+- Whether ENGINEER may manage kits (`kit.manage`) or only ADMIN — still ADMIN
+  only after Phase 5.
 - Whether removing an asset from a kit should also be offered from the
   equipment workspace (today it is a kit operation only).
 - Whether the nightly overdue sweep (R-3) lands with bookings in Phase 7 or

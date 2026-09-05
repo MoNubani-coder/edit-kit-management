@@ -71,13 +71,24 @@ asset disappears from lists but its history survives. Both are automated.
 
 ---
 
-## Phase 5 — Kit management
+## Phase 5 — Kit management ✅ COMPLETE
 
-Kit CRUD, contents editor (add/remove/reorder assets, slot labels, required
-flags), kit software, default checklist template, kit status.
+Delivered on the top-navigation shell: the kit list with status tabs, search
+that reaches into kit contents (asset code, barcode, serial) and a kit-barcode
+scan path; create and edit with typed kit codes (`MBP-03`, `WIN-01`,
+`AUDIO-01`) and database-enforced uniqueness; the kit workspace with Overview,
+Equipment (grouped by category, accessories expandable), Software, Checklist
+and History tabs; the composition editor with a barcode-friendly picker and
+server-side assignment rules backed by the one-active-kit constraint; slot
+labels and required / optional membership; software expectations; checklist
+template assignment; the single availability calculation (AD-17) reused by the
+list, the workspace and the coming booking phases; kit history; audit entries
+for every change (five new `AuditAction` values by migration). Reordering
+members is by sort order only (no drag-and-drop yet).
 
-**Test:** build "External MBP Edit - 03" end to end from the UI, without
-touching code. This is the phase that proves the central requirement.
+**Test:** building "External MBP Edit - 03" end to end from the UI, without
+touching code, is now possible: create the kit, scan equipment into it, pick
+its software and checklist. Every rule behind it is automated (36 tests).
 
 ---
 

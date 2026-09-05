@@ -76,3 +76,65 @@ export async function listAccessoryTypes(db: Db): Promise<AccessoryTypeOption[]>
     orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
   })
 }
+
+// -----------------------------------------------------------------------------
+// Software applications and checklist templates (kit configuration pickers)
+// -----------------------------------------------------------------------------
+
+export interface SoftwareApplicationOption {
+  id: string
+  name: string
+  vendor: string | null
+  version: string | null
+}
+
+export async function listSoftwareApplications(db: Db): Promise<SoftwareApplicationOption[]> {
+  return db.softwareApplication.findMany({
+    where: { deletedAt: null, isActive: true },
+    select: { id: true, name: true, vendor: true, version: true },
+    orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+  })
+}
+
+export interface ChecklistTemplateOption {
+  id: string
+  name: string
+  description: string | null
+  version: number
+  isDefault: boolean
+  isActive: boolean
+  itemCount: number
+}
+
+export async function listChecklistTemplates(db: Db): Promise<ChecklistTemplateOption[]> {
+  const records = await db.checklistTemplate.findMany({
+    where: { deletedAt: null, isActive: true },
+    select: { id: true, name: true, description: true, version: true, isDefault: true, isActive: true, _count: { select: { items: true } } },
+    orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+  })
+  return records.map((record) => ({
+    id: record.id,
+    name: record.name,
+    description: record.description,
+    version: record.version,
+    isDefault: record.isDefault,
+    isActive: record.isActive,
+    itemCount: record._count.items,
+  }))
+}
+
+export interface ChecklistTemplateItemRow {
+  id: string
+  label: string
+  description: string | null
+  phase: 'HANDOVER' | 'RETURN' | 'BOTH'
+  isRequired: boolean
+}
+
+export async function listChecklistTemplateItems(db: Db, templateId: string): Promise<ChecklistTemplateItemRow[]> {
+  return db.checklistTemplateItem.findMany({
+    where: { templateId },
+    select: { id: true, label: true, description: true, phase: true, isRequired: true },
+    orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }],
+  })
+}

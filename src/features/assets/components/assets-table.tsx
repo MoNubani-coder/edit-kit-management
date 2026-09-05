@@ -113,10 +113,10 @@ export function AssetsTable({
                   <td className={`${TD} hidden font-mono text-xs text-foreground xl:table-cell`}>{row.admBarcode ?? <span className="text-subtle">—</span>}</td>
                   <td className={`${TD} text-foreground`}>
                     {row.currentKit ? (
-                      <span>
+                      <Link href={`/kits/${row.currentKit.id}`} className="hover:underline">
                         <span className="font-medium">{row.currentKit.kitCode}</span>
                         <span className="hidden text-muted 2xl:inline"> · {row.currentKit.name}</span>
-                      </span>
+                      </Link>
                     ) : (
                       <span className="text-subtle">Unassigned</span>
                     )}

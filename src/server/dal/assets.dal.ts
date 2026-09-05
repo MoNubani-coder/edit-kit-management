@@ -634,7 +634,7 @@ export async function getAssetHistory(db: Db, id: string, options: AssetHistoryO
       title: `Added to kit ${membership.kit.kitCode}`,
       detail: membership.slotLabel ? `Slot: ${membership.slotLabel}` : kitLabel,
       actorName: null,
-      reference: { label: membership.kit.kitCode, href: '/kits' },
+      reference: { label: membership.kit.kitCode, href: `/kits/${membership.kit.id}` },
     })
     if (membership.removedAt) {
       events.push({
@@ -644,7 +644,7 @@ export async function getAssetHistory(db: Db, id: string, options: AssetHistoryO
         title: `Removed from kit ${membership.kit.kitCode}`,
         detail: kitLabel,
         actorName: null,
-        reference: { label: membership.kit.kitCode, href: '/kits' },
+        reference: { label: membership.kit.kitCode, href: `/kits/${membership.kit.id}` },
       })
     }
   }

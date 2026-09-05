@@ -77,7 +77,7 @@ export function AssetSummary({
         </Field>
         <Field label="Current kit">
           {asset.currentKit ? (
-            <Link href="/kits" className="text-accent-foreground hover:underline">
+            <Link href={`/kits/${asset.currentKit.id}`} className="text-accent-foreground hover:underline">
               <span className="font-medium">{asset.currentKit.kitCode}</span> · {asset.currentKit.name}
               {asset.currentKit.slotLabel ? <span className="text-muted"> · {asset.currentKit.slotLabel}</span> : null}
             </Link>

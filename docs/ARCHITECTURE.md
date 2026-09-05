@@ -1,7 +1,6 @@
 # Edit Kit Management System — Architecture
 
-**Status:** Phase 4 (equipment / asset management) — complete. Phases 1–3 —
-complete.
+**Status:** Phase 5 (kit management) — complete. Phases 1–4 — complete.
 **Last updated:** 2026-09-05
 
 ---
@@ -593,6 +592,26 @@ survives sign-out and applies to the login page as well.
 
 ---
 
+### AD-17 — Kit readiness is computed, never stored
+
+**Decision.** `Kit.status` records what an operator or a booking decided
+(AVAILABLE, MAINTENANCE, RESERVED …). Whether the kit can actually go out is a
+separate, derived answer - `evaluateKitAvailability` in `kits.service.ts` -
+computed from the live facts about its members (status, maintenance in
+progress or on hold, removal), its live booking and its own status, with
+required members blocking and optional members warning.
+
+**Why.** A stored "ready" flag would have to be rewritten every time any of a
+dozen assets changed state, from every code path that can change one; the
+first path that forgets leaves a kit that says Ready with a damaged monitor
+inside. Deriving it from indexed facts costs one extra select per page and can
+never be stale. The same function will gate booking creation and handover, so
+the rule exists exactly once.
+
+**Consequence.** The list and the workspace show both: the status badge (what
+was decided) and the availability badge (what the equipment allows), and the
+notice lists the equipment standing in the way.
+
 ## 6. Folder structure
 
 ```
@@ -608,7 +627,8 @@ edit-kit-management/
 │  ├─ migrations/
 │  │  ├─ 20260903000000_init/
 │  │  ├─ 20260903000100_integrity_constraints_and_search_indexes/
-│  │  └─ 20260903000200_maintenance_records/
+│  │  ├─ 20260903000200_maintenance_records/
+│  │  └─ 20260905134441_kit_audit_actions/   # five AuditAction values (Phase 5)
 │  └─ seed/
 │     ├─ index.ts                   # orchestrator
 │     ├─ 01-users.ts
@@ -641,7 +661,7 @@ edit-kit-management/
 │  ├─ components/
 │  │  ├─ ui/                        # shadcn primitives, unmodified
 │  │  ├─ layout/                    # AppSidebar, AppHeader, Breadcrumbs
-│  │  └─ common/                    # StatusBadge, DataTable, EmptyState,
+│  │  └─ common/                    # StatusBadge, Timeline, Pagination, EmptyState,
 │  │                                # ConfirmDialog, PageHeader, Stepper
 │  ├─ features/                     # one folder per bounded context
 │  │  ├─ auth/components/login-form.tsx   # Phase 2
@@ -650,6 +670,9 @@ edit-kit-management/
 │  │  │                                   #   quick-actions, editor-dashboard
 │  │  ├─ assets/                          # Phase 4: hrefs.ts + components (toolbar, table, form,
 │  │  │                                   #   summary, accessories, maintenance, issues, history)
+│  │  ├─ kits/                            # Phase 5: hrefs.ts + components (toolbar, table, form, overview,
+│  │  │                                   #   availability badge / notice, equipment panel, asset picker,
+│  │  │                                   #   member / software / checklist forms, history)
 │  │  ├─ admin/components/                # admin-tabs, category-form, category-active-toggle
 │  │  ├─ bookings/  kits/  assets/  editors/  issues/
 │  │  ├─ inspections/               # the wizard lives here
@@ -672,12 +695,14 @@ edit-kit-management/
 │  │  │  ├─ route-policy.ts         #   public / authenticated / permission per path
 │  │  │  ├─ rate-limit.ts           #   LoginRateLimiter seam + in-memory default
 │  │  │  └─ errors.ts               #   UnauthorizedError / ForbiddenError
-│  │  ├─ dal/                       # authorised reads (bookings, dashboard, assets, catalogue)
-│  │  ├─ actions/                   # server actions (auth.actions.ts, admin-users.actions.ts)
+│  │  ├─ dal/                       # authorised reads (bookings, dashboard, assets, catalogue, kits)
+│  │  ├─ actions/                   # server actions (auth, admin-users, assets, accessories, categories,
+│  │  │                             #   kits, kit-composition)
 │  │  ├─ services/                  # business logic, transaction-aware
 │  │  │  ├─ dashboard.service.ts    # Phase 3: buildDashboard (permission-gated assembly)
 │  │  │  ├─ assets.service.ts       # Phase 4: lifecycle rules, create/update/remove, accessories
 │  │  │  ├─ categories.service.ts   # Phase 4: create/update/activate categories
+│  │  │  ├─ kits.service.ts         # Phase 5: kit lifecycle, assignment rules, availability, composition
 │  │  │  ├─ errors.ts               # DomainError + unique-violation mapping
 │  │  │  ├─ booking.service.ts
 │  │  │  ├─ handover.service.ts
@@ -1326,3 +1351,217 @@ and ENGINEER cannot create or edit, validation errors, ADMIN creates, is
 audited and redirected, accessory authorization; the rollback is verified
 against the database (counter, rows, users unchanged). 138 tests in 16 files
 pass.
+
+---
+
+## 14. Kits (Phase 5)
+
+### 14.1 Shape
+
+Kits live at `/kits` (list), `/kits/new`, `/kits/[id]` (workspace with
+Overview, Equipment, Software, Checklist and History tabs driven by `?tab=`)
+and `/kits/[id]/edit`, all on the top-navigation shell. A kit is a code, a
+name and a barcode; everything about *what is in it* is a row somewhere else:
+
+| Concern | Rows | Managed on |
+|---|---|---|
+| Contents | `KitAsset` (`slotLabel`, `isRequired`, `sortOrder`, `removedAt`) | Equipment tab |
+| Software expected on the workstation | `KitSoftware` → `SoftwareApplication` | Software tab |
+| Handover checklist new bookings start from | `Kit.defaultChecklistTemplateId` → `ChecklistTemplate` | Checklist tab |
+
+Layers follow Phase 4: `server/dal/kits.dal.ts` (reads with explicit selects),
+`server/services/kits.service.ts` (lifecycle, assignment rules, availability,
+every mutation in one transaction with its audit entry),
+`server/actions/kits.actions.ts` and `kit-composition.actions.ts` (built with
+`action()`, all `kit.manage`), `features/kits/` (UI). Form state - which member
+is being edited, whether the equipment picker is open and what it searched for
+- lives in the URL (`?member=`, `?add=1`, `?pick=`), so it survives a refresh
+and Server Components render the forms in place. No Prisma reaches a client
+component; no rule lives in React.
+
+### 14.2 List, search and pagination
+
+One `count` plus one page query (`skip` / `take`), sorted by code, name, status
+or last update with a stable secondary key. Search is a single `OR` over the
+kit's code, name and barcode **and** over the active members' asset code, ADM
+barcode and serial number (`kitAssets: { some: { removedAt: null, asset: { OR:
+… } } }`), so scanning a monitor's barcode finds the kit it travels in. The
+trigram indexes on `kits` (code, name, barcode) and `assets` (barcode, serial)
+serve the partial matches. An exact kit barcode redirects to the kit.
+
+Status tabs map to the stored `KitStatus`: All · Available · Reserved ·
+Checked out · Maintenance / Unavailable (MAINTENANCE + DAMAGED) · Retired, with
+counts from one `GROUP BY status`. Each row also carries the *computed*
+availability (14.5): the page query selects the members' status, deletion flag
+and active-maintenance count and the live booking in the same statement, so
+25 rows cost two queries, not fifty.
+
+### 14.3 Lifecycle
+
+AD-16 applied to kits. `RESERVED` and `CHECKED_OUT` belong to bookings and
+cannot be entered or left by editing; a kit in either state is "controlled by
+its booking". `AVAILABLE`, `MAINTENANCE`, `DAMAGED` and `RETIRED` are manual,
+with two guards: a kit with equipment still in it or with a live booking
+cannot be `RETIRED`, and a kit is created only as `AVAILABLE`, `MAINTENANCE`
+or `DAMAGED`. Status changes are audited as `KIT_STATUS_CHANGED` with the
+reason typed by the operator.
+
+Removal is a soft delete (`deletedAt`, `isActive = false`) and is refused
+while the kit has members, a live booking, or a workflow status - the assets
+must first return to the pool. A removed kit's workspace still opens with a
+banner; its history is kept.
+
+**Contents lock.** While any booking of the kit is `READY_FOR_HANDOVER`,
+`CHECKED_OUT`, `OVERDUE` or `RETURN_INSPECTION`, the contents are frozen: the
+handover document is being or has been signed against them. A plain
+`RESERVED` booking does not freeze the contents - the snapshot is taken at
+handover.
+
+### 14.4 Composition and assignment rules
+
+`addKitAsset` and `removeKitAsset` check, in the transaction:
+
+| Rule (from the brief) | Check | Database backstop |
+|---|---|---|
+| 1. One active kit per asset | `currentKit` must be null; message names the other kit | partial unique index `kit_assets_one_active_kit_per_asset` |
+| 2. Soft-deleted / retired asset cannot join | `deletedAt`, `RETIRED` | - |
+| 3. CHECKED_OUT (or RESERVED) asset cannot move | asset status | - |
+| 4 / 5. Active maintenance = unavailable | `MaintenanceRecord` IN_PROGRESS or ON_HOLD counted per asset; status MAINTENANCE | - |
+| 6. No duplicate membership | active row for (kit, asset) | composite key `kit_assets_kitId_assetId_key` |
+| 7. No removal that breaks a workflow | contents lock (14.3); asset CHECKED_OUT / RESERVED | - |
+| 8. History is never destroyed | removal sets `removedAt`; re-adding the same asset to the same kit reactivates the composite row; the `KIT_ASSET_ADDED` / `KIT_ASSET_REMOVED` audit entries (carrying `kitAssetId`, `assetId`, `assetCode`) are the durable record of every join and leave | append-only `audit_logs` |
+
+Only `AVAILABLE` equipment with no active maintenance and no current kit can
+be added - DAMAGED and MISSING items are refused as well, since a kit is issued
+as a working whole. A retired kit and a kit under contents lock accept nothing.
+
+**Concurrency.** Two administrators adding the same asset to different kits
+both pass the pre-check; the second `INSERT` then trips the partial unique
+index. `translateKitAssetError` turns that P2002 into a `DomainError('conflict')`
+("This equipment was just added to another kit…"), which the action wrapper
+returns as a `rejected` result. The database, not the check, is the authority.
+
+The equipment picker (`?add=1&pick=`) is a GET form so a keyboard barcode
+scanner's Enter submits it; results come back with a verdict per row - an
+"Add" control or the sentence explaining why not - and an exact barcode or
+asset-code match is flagged as a scan and placed first.
+
+### 14.5 Availability
+
+`evaluateKitAvailability(facts)` in `kits.service.ts` is the one calculation
+of "can this kit go out right now". Facts (`KitAvailabilityFacts`) are the
+kit's status, deletion and active flags, the live booking, and per active
+member: status, deletion flag, active-maintenance count, `isRequired`. The
+DAL gathers them in one shape for the list (per row), the detail page (from
+the already-loaded detail) and `getKitAvailability(db, kitId)` (one query, for
+the booking phases). The verdict:
+
+```ts
+{
+  available: boolean,
+  state: 'ready' | 'reserved' | 'out' | 'unavailable',
+  reasons: [{ code, severity: 'blocking' | 'warning', assetId, assetCode, slotLabel, reason }],
+  blockingCount, warningCount, memberCount, requiredCount
+}
+```
+
+Blocking: kit removed / inactive / RETIRED / MAINTENANCE / DAMAGED, a live
+booking (state `reserved`, or `out` when the booking is CHECKED_OUT / OVERDUE /
+RETURN_INSPECTION), and any **required** member that is removed, not
+AVAILABLE, or has maintenance in progress or on hold. The same problems on an
+**optional** member are warnings and do not block. The UI renders the verdict
+through `KitAvailabilityBadge` (Ready · Reserved · Out · Not ready · N) and
+`AvailabilityNotice` (the sentences, each linking to the equipment) - no
+component recomputes it.
+
+### 14.6 Required versus optional membership
+
+`KitAsset.isRequired` already existed (Phase 1; default `true`; the seed marks
+the laptop stand optional). No migration was needed. It is exposed as a
+Required / Optional choice when adding a member and on the member edit form,
+and it is exactly what separates blocking reasons from warnings in 14.5.
+
+### 14.7 Software and checklist configuration
+
+Software expectations are `KitSoftware` rows (Required / Optional) chosen from
+the active `SoftwareApplication` catalogue; duplicates are refused by the
+composite key and reported as a conflict. Removal is a hard delete: handover
+software checks reference the application, never this row, and the
+`KIT_SOFTWARE_ADDED` / `KIT_SOFTWARE_REMOVED` audit entries keep the history.
+Whether an application is actually installed is a handover question, not
+answered here.
+
+The checklist tab shows the template the kit's bookings will start from - the
+kit's own or, when none is set, the system default (`isDefault`) - with its
+checks previewed read-only, and lets `kit.manage` pick another active template
+or clear back to the default (`KIT_CHECKLIST_CHANGED`). Templates are copied
+into bookings at creation, so this never alters an existing booking.
+
+### 14.8 History
+
+`getKitHistory` merges four sources into one trail, newest first: the kit's
+audit entries (creation, edits, status, members, software, checklist,
+removal), `KitAsset` rows (added / removed - skipped when an audit entry with
+the same `kitAssetId` already reports it, so seeded rows appear once and
+audited rows are not doubled), bookings (reserved · checked out · returned ·
+cancelled) and, with `issue.read`, issues against the kit. Every event is a
+sentence with an actor when known and a reference link; raw audit JSON is
+never rendered.
+
+### 14.9 Permissions
+
+`kit.read`: ADMIN, ENGINEER, VIEWER - list and workspace. `kit.manage`: ADMIN -
+create, edit, remove, every composition change. EDITOR has neither and
+receives 403 on `/kits`; the booking-scoped kit view an editor needs arrives
+with bookings. Pages check with `requirePermissionForPage`, actions with
+`action({ permission: 'kit.manage' })`, and the DAL exposes only display
+names for editors and engineers - never emails, ids or credentials.
+
+### 14.10 Audit
+
+Kit lifecycle reuses `CREATE`, `UPDATE`, `DELETE` and the existing
+`KIT_STATUS_CHANGED`. Composition needed its own vocabulary so the history and
+the audit page can tell "a member left" from "the notes changed":
+`KIT_ASSET_ADDED`, `KIT_ASSET_REMOVED`, `KIT_SOFTWARE_ADDED`,
+`KIT_SOFTWARE_REMOVED`, `KIT_CHECKLIST_CHANGED`, added to `AuditAction` by
+migration `20260905134441_kit_audit_actions` (five `ALTER TYPE … ADD VALUE`
+statements; no existing migration touched). Every entry names the kit as
+`entityType 'Kit'` and carries the member's `kitAssetId` / `assetId` /
+`assetCode` in `metadata` for the deduplication in 14.8.
+
+### 14.11 Tests
+
+`tests/integration/kits.service.test.ts` (26, each in `withRollback`): create
+with audit and detail shape; kit-code normalisation and rejection; duplicate
+code as a field error (database-enforced); edit, status reason, workflow
+statuses refused, retire only when empty; soft delete only when empty and
+unbooked; search by code / name / barcode and exact-barcode resolution;
+search through contained equipment (code, barcode, serial) including the
+seeded kit; status tabs and counts; pagination and sort; no sensitive fields in
+list, detail or history; add member with audit and cross-link on the asset;
+duplicate, other-kit, checked-out / reserved, maintenance (active record and
+status), retired / missing / damaged / removed / unknown equipment refused;
+retired kit and contents lock refuse additions; safe removal, reactivation of
+the composite row, slot edit; removal blocked by checkout and by
+reserved / checked-out equipment; the database race translated to a friendly
+conflict; availability ready / unavailable / warning / reserved / out /
+maintenance with the blocking asset identified; software add / duplicate /
+remove with audit; checklist assign / no-op / clear / validate; history order
+and deduplication (seeded kit shows 12 additions exactly once).
+`tests/integration/kits.actions.test.ts` (10, one rolled-back transaction):
+anonymous rejected; VIEWER and ENGINEER can list with availability per row;
+EDITOR forbidden; VIEWER / ENGINEER cannot create; validation before the
+database; ADMIN creates, audited, redirected; ENGINEER cannot edit; member
+add authorisation plus duplicate and other-kit refusals through the action
+layer; software and checklist authorisation. 174 tests in 18 files pass; the
+ASSET counter, kit and user tables are unchanged after two consecutive runs.
+
+### 14.12 Development-database note
+
+The local `number_sequences` row for `ASSET` reads 14 while the highest asset
+code is `AST-000012`: two numbers were consumed by pre-Phase-4 test runs
+before the suites were made side-effect free. This is a development-only
+artefact. Production code is untouched by it (the counter is authoritative and
+gap-free from here on), and the sequence is deliberately not reset here; if
+the local database is ever rebuilt (`npm run db:reset`) the discrepancy
+disappears.

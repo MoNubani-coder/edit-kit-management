@@ -1,4 +1,4 @@
-import type { AssetStatus, BookingStatus, IssueSeverity, IssueStatus, MaintenanceStatus } from '@prisma/client'
+import type { AssetStatus, BookingStatus, IssueSeverity, IssueStatus, KitStatus, MaintenanceStatus } from '@prisma/client'
 
 import { Badge, type BadgeTone } from '@/components/ui/badge'
 
@@ -34,6 +34,15 @@ const ASSET_TONES: Record<AssetStatus, BadgeTone> = {
   MAINTENANCE: 'amber',
   DAMAGED: 'amber',
   MISSING: 'red',
+  RETIRED: 'neutral',
+}
+
+const KIT_TONES: Record<KitStatus, BadgeTone> = {
+  AVAILABLE: 'green',
+  RESERVED: 'blue',
+  CHECKED_OUT: 'blue',
+  MAINTENANCE: 'amber',
+  DAMAGED: 'amber',
   RETIRED: 'neutral',
 }
 
@@ -77,6 +86,14 @@ export function IssueStatusBadge({ status }: { status: IssueStatus }) {
 export function AssetStatusBadge({ status }: { status: AssetStatus }) {
   return (
     <Badge tone={ASSET_TONES[status]} dot>
+      {humanizeStatus(status)}
+    </Badge>
+  )
+}
+
+export function KitStatusBadge({ status }: { status: KitStatus }) {
+  return (
+    <Badge tone={KIT_TONES[status]} dot>
       {humanizeStatus(status)}
     </Badge>
   )
