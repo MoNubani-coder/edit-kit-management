@@ -2,12 +2,12 @@
 
 Running log of what exists, what to test, and what comes next.
 
-- **Current phase:** 2 of 13 — Authentication and RBAC — ✅ **complete**
+- **Current phase:** 3 of 13 — Dashboard, theme switch and visual redesign — ✅ **complete**
 - **Status:** verified against PostgreSQL 16.15 — three migrations applied, zero
-  drift, 30/30 database constraint tests, 86/86 Vitest tests (auth,
-  RBAC, routes), HTTP smoke test of the built app, typecheck + lint clean,
-  production build clean
-- **Last updated:** 2026-09-03 (Phase 2)
+  drift, 30/30 database constraint tests, 114/114 Vitest tests (auth,
+  RBAC, routes, dashboard, time zone, theme switch), HTTP smoke test of the
+  built app for every role, typecheck + lint clean, production build clean
+- **Last updated:** 2026-09-03 (Phase 3)
 
 Companion documents: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (design and
 rationale) · [docs/ROADMAP.md](docs/ROADMAP.md) (all 13 phases).
@@ -450,12 +450,12 @@ ever burned; two `maintenance.*` settings join the `AppSetting` seed.
 
 ## Open questions blocking later phases
 
-Full detail in ARCHITECTURE.md §7. One still needs an answer before the phase
-named; the other is now resolved:
+Full detail in ARCHITECTURE.md §7. Both are resolved:
 
-- **R-1 — how does an external editor sign?** (blocks Phase 8.) Assumed: the
-  editor signs in person on the engineer's tablet. The alternative — remote
-  counter-signing — needs accounts for freelancers and an extra booking state.
+- **R-1 — how does an external editor sign?** ✅ **Resolved:** external editors
+  sign in person on the authenticated engineer's tablet or device during
+  handover and return. No external `User` account is required. Phase 8 builds
+  exactly that flow.
 - **R-7 — is maintenance tracking in scope?** ✅ **Resolved** in the maintenance
   refinement: `MaintenanceRecord` exists with its enums, numbering scope,
   constraints, seed and tests (ARCHITECTURE.md §3.6 and §4.7). Phase 4 builds
@@ -471,21 +471,153 @@ commit. `.gitignore` excludes `.env` and `storage/`; `.env.example` is tracked.
 
 ---
 
-## Next: Phase 3 — Application shell and dashboard
+## Phase 3 — Dashboard and login redesign (complete)
 
-Phase 2 already delivers a working shell (sidebar, header, role badge,
-sign-out, permission-filtered navigation). Phase 3 replaces the hand-written
-primitives with shadcn/ui, adds the shared components (`DataTable`,
-`StatusBadge`, `PageHeader`, `EmptyState`, `ConfirmDialog`, `Stepper`), the
-live dashboard tiles and activity panels, breadcrumbs, and the tablet layout
-pass (768–1024 px).
+Design and rationale: [docs/ARCHITECTURE.md §12](docs/ARCHITECTURE.md), AD-13
+(business time zone), AD-14 (the dashboard derives, never stores).
 
-**Open decisions for Phase 3**
+**What exists**
 
-- Where the user-management screen lands (it is under Administration in the
-  navigation; `setUserStatus` exists, password reset and role change do not).
-- Whether the dashboard is role-specific (an EDITOR's dashboard is only their
-  bookings) or one layout with tiles hidden by permission.
-- Rate-limit store for multi-instance deployment, if the deployment target is
-  more than one container.
-- R-1 still needs an answer before Phase 8.
+- `src/lib/datetime.ts` — business-time helpers on `Intl` only:
+  `businessDayRange`, `startOfBusinessDay`, `isSameBusinessDay`,
+  `formatDate` (`03 Sep 2026`), `formatTime` (`14:30`), `formatDateTime`,
+  `formatRelative`, `humanDuration`, `describeDue`. Default zone `Asia/Dubai`
+  (`APP_TIMEZONE`).
+- `src/server/dal/dashboard.dal.ts` — one indexed query per figure with
+  explicit selects and limits; booking reads take `visibilityFor(actor)`.
+- `src/server/services/dashboard.service.ts` — `buildDashboard(db, actor, {
+  now, timeZone })` gates every section with `can()` / `canAny()` and runs the
+  permitted queries concurrently; `loadDashboard()` = `requirePermission` +
+  build; `quickActionsFor(actor)` links only to routes that exist.
+- `src/features/dashboard/components/` — `DashboardView` (renders non-null
+  sections), `KpiCard`, `SectionCard`, `BookingsTable` (today / upcoming /
+  overdue / history variants), `IssuesTable`, `ActivityFeed`, `QuickActions`,
+  `EditorDashboard`. Shared `StatusBadge` (booking, issue, severity tones) and
+  `EmptyState` under `src/components/common/`.
+- `src/app/(app)/dashboard/page.tsx` (`force-dynamic`) and `loading.tsx`
+  (skeleton). The permission-debug list is gone.
+- Login redesign: `src/app/(auth)/layout.tsx` (dark branded panel + card
+  column, stacked below `lg`) and `src/app/(auth)/login/page.tsx` (card with
+  EK mark, "Sign in", footer "Internal use only · Access is logged").
+  `login-form.tsx` and all sign-in behaviour are unchanged.
+- Theme: `src/components/theme/theme-provider.tsx` (next-themes, class on
+  `<html>`, `localStorage` key `ekms-theme`, CSP nonce passed to the anti-flash
+  script) and `src/components/theme/pull-cord-theme-toggle.tsx` (the pull-cord
+  switch: Pointer Events drag with 40 px clamp / 24 px threshold, tap, Enter and
+  Space, `aria-label` per state, reduced-motion aware). Tokens for both modes
+  in `src/app/globals.css`; root layout adds Manrope and
+  `suppressHydrationWarning`. See ARCHITECTURE.md AD-15 and §12.7.
+- Visual redesign (ARCHITECTURE.md §12.8): tokenised `Button`, `Badge` (dot
+  variant), `Input`, `Label`, `Alert`, `EmptyState`, `PageHeader` (eyebrow),
+  `StatusPage`; `AppShell` rebuilt (17.5 rem rail, brand block, grouped
+  navigation with teal marker, bottom user panel with sign-out and the
+  pull-cord, context top bar with date and initials); dashboard `StatStrip` /
+  `Stat` replacing loose KPI cards, `SectionCard` with tinted header and count
+  chip, table restyle, timeline activity feed, shortcut chips; login frame and
+  card restyled to the same tokens. `src/lib/constants/branding.ts` holds the
+  tagline and brand highlights.
+- Tests: `tests/unit/datetime.test.ts`, `tests/integration/dashboard.test.ts`,
+  `tests/component/pull-cord-theme-toggle.test.tsx` (jsdom + Testing Library).
+
+**Verification — Phase 3 (2026-09-03)**
+
+| Check | Result |
+|---|---|
+| `npm test` (14 files) | ✅ **114 / 114** |
+| `scripts/db/verify-constraints.sql` | ✅ 30 / 30 PASS |
+| `prisma migrate status` | ✅ 3 migrations, up to date — **no schema or index change was needed** (§12.4) |
+| `prisma migrate diff --exit-code` | ✅ No difference detected |
+| `npm run check` | ✅ clean |
+| `npm run build` | ✅ clean |
+| HTTP smoke test (`next start`, curl) | ✅ login page shows brand, "Sign in", footer, nonce on scripts, no environment/permission text; ADMIN dashboard renders all six tiles, quick actions, today / upcoming / issues / activity with sign-in events; VIEWER renders tiles without issues or quick actions; EDITOR renders current booking / upcoming return / history only; no permission strings anywhere |
+
+**What the dashboard tests prove** (`tests/integration/dashboard.test.ts`,
+rolled back, fixed `now` = 21:00 UTC 3 Sep = 01:00 Dubai 4 Sep):
+
+1. unauthenticated `loadDashboard()` → UnauthorizedError
+2. ADMIN: +2 available, +1 reserved, +3 checked out, +1 maintenance kits
+   (inactive and retired kits excluded), +2 assets in maintenance, +2 active
+   maintenance records, +3 open issues, +2 overdue (one by time, one flagged)
+3. ENGINEER: all operational sections, no sign-in events in the feed
+4. VIEWER: tiles and bookings, no issues, no maintenance-record hint, no quick
+   actions, no sign-in events
+5. EDITOR: only own bookings in history, other editor's absent, current booking
+   is the earliest live one; editor without a profile gets empty sections
+6–10. counts above, each against a delta measured in the same transaction
+11. 00:30 Dubai collection is "today", 23:30 Dubai the night before is not,
+    cancelled and tomorrow excluded — and the same instant on a UTC calendar
+    gives the wrong answer
+12. upcoming returns ascend by expected return and exclude overdue
+13. activity capped at 10, newest first, auth events first for admins
+14. far-future `now` yields empty lists, not errors
+15. serialised dashboard contains no passwordHash / payload / IP / user-agent /
+    email; activity rows carry exactly action, actorName, createdAt, entityId,
+    entityType, id, summary
+
+**Decisions taken in Phase 3**
+
+| Decision | Reason |
+|---|---|
+| Kit / asset tiles read stored status; overdue is derived (AD-14) | The workflows own kit and asset status; overdue was always meant to be computed at read time (R-3) |
+| `booking.overdueGraceHours` not applied on the dashboard | A kit an hour late should be visible to the engineer now; grace governs the sweep and notifications |
+| "Today" = collections starting today or returns due today, CANCELLED excluded | What the store needs each morning; a kit out all week is not "today's" |
+| Editor's "current booking" = earliest live booking | The most urgent thing to show; a stale OVERDUE booking must not hide behind a future reservation |
+| Auth events in the feed only for `admin.audit.read` | Sign-ins are security telemetry; the operational feed for engineers stays operational |
+| Quick actions link to list pages only | No booking or issue creation form exists yet; a button to nowhere is worse than none |
+| `Intl`-based date helper, no library | One dependency fewer; output identical across hosts; Dubai has no DST but the helper handles zones that do |
+| Dashboard page is `force-dynamic` | Live counts must never be prerendered or cached |
+| shadcn/ui, DataTable, ConfirmDialog, Stepper, breadcrumbs deferred | Nothing in Phase 3 needed them; adopt them with the first CRUD screens in Phase 4 rather than restyle twice |
+| `next-themes` with `attribute="class"`, default `system` | Persistence, OS preference and the anti-flash script for free; the script takes the CSP nonce, so the strict policy is untouched |
+| Colours as CSS tokens, not per-component `dark:` sprinkles | One place to tune both modes; components stay palette-free |
+| Theme state in `localStorage`, not the database | It must survive sign-out and apply on the login page, where there is no user |
+| Pull-cord gesture state in refs; keyboard via native click only | Pointer events can outrun a render; two activation paths would double-toggle |
+| Manrope for display, Inter for body; one teal accent | Distinct voice without hurting dense-table legibility; one accent keeps the navy identity calm |
+| Instrument strip instead of six KPI boxes | Changes the dashboard's rhythm - the strongest single differentiator from a stock admin template |
+
+**Manual browser checks worth doing**
+
+- [ ] `/login` at 1366×768, tablet portrait and a narrow window: split layout
+  above `lg`, stacked brand header below; focus rings on inputs and buttons;
+  password show/hide; empty submit shows field errors; wrong password shows the
+  generic message; spinner while submitting.
+- [ ] `/login?callbackUrl=/kits` → lands on `/kits`; sign-out from the header
+  returns to `/login`.
+- [ ] Dashboard as ADMIN, ENGINEER, VIEWER, EDITOR: tiles and sections match
+  §12.2; no permission strings anywhere; dates read `03 Sep 2026` / `14:30`.
+- [ ] Insert a CHECKED_OUT booking with `expectedReturnDate` in the past (psql)
+  and confirm the Overdue tile, the amber section and the "Overdue by" column.
+- [ ] Devtools: no CSP violations on `/login` or `/dashboard`; the loading
+  skeleton appears on a throttled connection.
+- [ ] Theme: pull the cord with the mouse past ~24 px → light mode, bulb lit;
+  pull again → dark; touch-drag on a tablet; tap the bulb without dragging;
+  Tab to it and press Enter, then Space; refresh keeps the choice; sign out and
+  back in keeps it; `/login` and the app agree; no hydration warning in the
+  console; with "reduce motion" enabled the switch still works without the
+  spring-back.
+- [ ] Redesign: rail, top bar, instrument strip, panels and login card read as
+  one product at 1366×768, on a tablet and in a narrow window, in both modes.
+
+---
+
+## Next: Phase 4 — Asset management
+
+CRUD for assets and accessories, `AST-NNNNNN` allocation, uniqueness errors as
+field errors, soft delete, status transitions writing `AssetStatusLog`,
+maintenance records (`MNT-YYYY-NNNNNN`) per asset, and the asset history
+timeline. First data-heavy screens: adopt shadcn/ui and build `DataTable`,
+`ConfirmDialog` and breadcrumbs here rather than restyling later.
+
+**Open decisions for Phase 4**
+
+- Whether ENGINEER may manage assets and maintenance records (`asset.manage`,
+  `maintenance.manage`) or only ADMIN — the matrix currently says ADMIN only.
+- Whether the nightly overdue sweep (R-3) lands with bookings in Phase 7 or
+  earlier as a standalone job.
+- Rate-limit store for multi-instance deployment, if the target is more than
+  one container.
+- Hard-deleting a user who has ever signed in fails: `audit_logs.actorUserId`
+  is `ON DELETE SET NULL`, but the append-only trigger rejects that update.
+  Soft delete (`deletedAt`) is the intended operation and works; user
+  management in Phase 4 should either rely on it exclusively or switch the
+  foreign key to `RESTRICT` (new migration) so the failure reads as a rule,
+  not a surprise.

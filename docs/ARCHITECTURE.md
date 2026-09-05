@@ -1,7 +1,7 @@
 # Edit Kit Management System — Architecture
 
-**Status:** Phase 2 (Authentication & RBAC) — complete. Phase 1 (schema,
-including the maintenance refinement) — complete.
+**Status:** Phase 3 (dashboard and login redesign) — complete. Phases 1 and 2
+— complete.
 **Last updated:** 2026-09-03
 
 ---
@@ -542,6 +542,40 @@ counted; the account locks after `MAX_LOGIN_ATTEMPTS` for
 `LOGIN_LOCKOUT_MINUTES`, and a per-address / per-account sliding-window rate
 limiter sits in front of the whole thing.
 
+### AD-13 — One business time zone, one conversion module
+
+Timestamps are instants (`TIMESTAMPTZ`). Every question about a *day* -
+"today's bookings", "due tomorrow", the date printed on a row - is asked of the
+business wall clock, `APP_TIMEZONE` (default `Asia/Dubai`, +04:00, no DST),
+never of the server's or the browser's clock. `src/lib/datetime.ts` is the only
+module that performs that conversion; it is built on `Intl` alone so output is
+identical on every host and needs no extra dependency. Components receive a
+`timeZone` string in their data and call the helper. A dashboard rendered at
+21:00 UTC on 3 September shows 4 September, because that is the date in Dubai.
+
+### AD-14 — The dashboard derives, it never stores
+
+Kit and asset headline counts read the *stored* status columns, which the
+workflows maintain (AD-8) - the dashboard does not second-guess them from
+bookings. "Overdue", by contrast, is derived at read time exactly as R-3
+planned: a booking is overdue when it is flagged `OVERDUE` or is
+`CHECKED_OUT` past `expectedReturnDate`. No dashboard-specific column, view or
+cache exists; every number is one `count` / `GROUP BY` or one bounded
+`findMany` against an existing index (§12.4).
+
+### AD-15 — Theme is a class on <html>; colours are tokens
+
+Light and dark are two sets of CSS custom properties (`src/app/globals.css`)
+selected by a `light` / `dark` class on `<html>`. Tailwind utilities read the
+tokens through the `@theme` block (`bg-panel`, `text-muted`, `border-line`,
+…), so components never name a palette colour and the whole interface changes
+with one class. `next-themes` owns the state: it persists the choice in
+`localStorage` (`ekms-theme`), follows the operating system until the user
+chooses, and injects a one-line anti-flash script that receives the request's
+CSP nonce - no `unsafe-inline`, no hydration mismatch (`<html
+suppressHydrationWarning>`). Nothing is stored server-side, so the choice
+survives sign-out and applies to the login page as well.
+
 ---
 
 ## 6. Folder structure
@@ -596,6 +630,9 @@ edit-kit-management/
 │  │                                # ConfirmDialog, PageHeader, Stepper
 │  ├─ features/                     # one folder per bounded context
 │  │  ├─ auth/components/login-form.tsx   # Phase 2
+│  │  ├─ dashboard/components/            # Phase 3: dashboard-view, kpi-card, section-card,
+│  │  │                                   #   bookings-table, issues-table, activity-feed,
+│  │  │                                   #   quick-actions, editor-dashboard
 │  │  ├─ bookings/  kits/  assets/  editors/  issues/
 │  │  ├─ inspections/               # the wizard lives here
 │  │  ├─ signatures/                # SignaturePad
@@ -617,9 +654,10 @@ edit-kit-management/
 │  │  │  ├─ route-policy.ts         #   public / authenticated / permission per path
 │  │  │  ├─ rate-limit.ts           #   LoginRateLimiter seam + in-memory default
 │  │  │  └─ errors.ts               #   UnauthorizedError / ForbiddenError
-│  │  ├─ dal/                       # authorised reads (bookings.dal.ts scopes EDITOR)
+│  │  ├─ dal/                       # authorised reads (bookings.dal.ts scopes EDITOR; dashboard.dal.ts)
 │  │  ├─ actions/                   # server actions (auth.actions.ts, admin-users.actions.ts)
 │  │  ├─ services/                  # business logic, transaction-aware
+│  │  │  ├─ dashboard.service.ts    # Phase 3: buildDashboard (permission-gated assembly)
 │  │  │  ├─ booking.service.ts
 │  │  │  ├─ handover.service.ts
 │  │  │  ├─ return.service.ts
@@ -633,6 +671,7 @@ edit-kit-management/
 │  │
 │  ├─ lib/
 │  │  ├─ env.ts                     # zod-validated environment
+│  │  ├─ datetime.ts                # Phase 3: business time zone helpers (AD-13)
 │  │  ├─ validation/                # zod schemas shared client + server
 │  │  ├─ constants/                 # status labels, colours, nav definition
 │  │  └─ utils/
@@ -660,19 +699,16 @@ from `server/`, that is a code smell unless it is a Server Component.
 
 Listed worst-first. Items marked **[decision needed]** change what gets built.
 
-### R-1 — How does an external editor sign? **[decision needed]**
+### R-1 — How does an external editor sign? — **RESOLVED**
 
-The brief gives EDITOR a login and a "Sign handover" permission, but also
-describes *external* editors. These conflict. The schema supports both
-(`EditorProfile.userId` is nullable), but the wizard has to pick one flow:
-
-- **(a) Co-signing on the engineer's tablet** — editor signs in person on the
-  engineer's device during handover. Works for everyone, matches the paper
-  process, no account needed. **Assumed default.**
-- **(b) Remote counter-signing** — editor logs in separately and signs. Needs
-  accounts for freelancers and a "pending signature" booking state.
-
-Building (a) first and adding (b) later is cheap. Building (b) first is not.
+**External editors sign in person on the authenticated engineer's tablet or
+device.** No external `User` account is required. The engineer is signed in;
+the editor signs the handover and return on that device, exactly as they signed
+the paper form. `EditorProfile.userId` stays nullable for this reason, and
+internal editors who do have logins keep `booking.readOwn` / `booking.signOwn`
+for their own bookings. Remote counter-signing (a freelancer logging in to
+sign later) is out of scope; the schema would allow it later without
+migration, but nothing is built for it.
 
 ### R-2 — Signature legal weight
 
@@ -698,13 +734,17 @@ requires a note, and offers to raise an Issue. Reading (b) would block handover
 whenever a single cable is missing, which is likely not what the department
 wants.
 
-### R-5 — Timezone handling
+### R-5 — Timezone handling — *resolved (AD-13)*
 
 `ADM` suggests Asia/Dubai. "Booking Start Date" on paper is a *date*; in the
 database it is an instant. Storing UTC and rendering in a configured
 `APP_TIMEZONE` is correct, but a booking created at 00:30 Dubai time will render
-as the previous day if anything reads it in UTC. All date rendering must go
-through one formatter. **Assumed** `Asia/Dubai`, stored as an `AppSetting`.
+as the previous day if anything reads it in UTC. Resolved in Phase 3:
+`src/lib/datetime.ts` is the single place instants become wall-clock values
+(`businessDayRange`, `formatDate`, `formatTime`, `describeDue`), the business
+zone defaults to `Asia/Dubai` (`APP_TIMEZONE`), and the dashboard's "today" is
+computed on that calendar - unit-tested at the 21:00 UTC / 01:00 Dubai boundary
+and on DST transition days for zones that have them.
 
 ### R-6 — Concurrent edits to one inspection
 
@@ -884,7 +924,7 @@ acceptable.
 
 Roles: `ADMIN`, `ENGINEER`, `EDITOR`, `VIEWER` (the `UserRole` enum). External
 editors have an `EditorProfile` and no `User`; they never authenticate, they
-sign in person on the engineer's tablet (R-1, assumed).
+sign in person on the authenticated engineer's tablet (R-1, resolved).
 
 | Permission | ADMIN | ENGINEER | EDITOR | VIEWER |
 |---|:-:|:-:|:-:|:-:|
@@ -988,3 +1028,165 @@ cookies for every route class.
   with the 403 body (the proxy still answers 403 for `/admin/*`).
 - `unauthorized()` / `forbidden()` are behind Next's experimental
   `authInterrupts` flag.
+
+---
+
+## 12. Dashboard (Phase 3)
+
+### 12.1 Shape
+
+```
+ app/(app)/dashboard/page.tsx        requirePermissionForPage('dashboard.view')
+          │                          buildDashboard(prisma, actor, { timeZone })
+          ▼
+ server/services/dashboard.service.ts   decides WHAT the actor may see (can / canAny)
+          │                             runs the permitted queries concurrently
+          ▼
+ server/dal/dashboard.dal.ts            one indexed query per fact, explicit select,
+          │                             booking reads scoped by visibilityFor(actor)
+          ▼
+ features/dashboard/components/*        render whatever sections are non-null;
+                                        never check a role or permission
+```
+
+The service returns a `DashboardData` object whose sections are `null` when
+the actor lacks the permission and empty when there is simply nothing to show.
+The page and components therefore contain no authorization logic at all; the
+matrix in `permissions.ts` (AD-11) is the only place it lives.
+
+### 12.2 What each role sees
+
+| Section | Permission | ADMIN | ENGINEER | VIEWER | EDITOR |
+|---|---|:-:|:-:|:-:|:-:|
+| Available / Reserved / Checked-out kits | `kit.read` | ✓ | ✓ | ✓ | |
+| Overdue count and table | `booking.read` | ✓ | ✓ | ✓ | |
+| Assets in maintenance | `asset.read` | ✓ | ✓ | ✓ | |
+| … active maintenance records hint | `maintenance.read` | ✓ | ✓ | | |
+| Open issues count and table | `issue.read` | ✓ | ✓ | | |
+| Today's bookings, upcoming returns | `booking.read` | ✓ | ✓ | ✓ | |
+| Recent activity (operational events) | not own-only | ✓ | ✓ | ✓ | |
+| … including sign-in / sign-out events | `admin.audit.read` | ✓ | | | |
+| Current booking, upcoming return, history | `booking.readOwn` without `booking.read` | | | | ✓ |
+| Quick actions | any of `booking.create`, `issue.create` | ✓ | ✓ | | |
+
+An EDITOR's booking reads go through the same `visibilityFor(actor)` fragment
+as the bookings list, so another editor's booking cannot be returned by the
+query, let alone rendered. Object-level misses stay "not found".
+
+### 12.3 Derivations
+
+| Figure | Source | Rule |
+|---|---|---|
+| Available / Reserved / Checked out / Maintenance kits | `kits.status` (stored) | `GROUP BY status` over `deletedAt IS NULL AND isActive`; total excludes RETIRED |
+| Overdue bookings | derived (R-3, AD-14) | `status = OVERDUE` OR (`status = CHECKED_OUT` AND `expectedReturnDate < now`) |
+| Assets in maintenance | `assets.status = MAINTENANCE` (stored; set when a record goes IN_PROGRESS per `maintenance.setAssetStatusOnStart`) | count |
+| Active maintenance records | `maintenance_records.status IN (IN_PROGRESS, ON_HOLD)` | count, shown as the tile hint |
+| Open issues | `issues.status IN (OPEN, UNDER_INVESTIGATION)` | count + newest six |
+| Today's bookings | business-day range in `APP_TIMEZONE` | `bookingStart` in today OR `expectedReturnDate` in today; CANCELLED excluded |
+| Upcoming returns | out bookings not yet overdue | `status IN (CHECKED_OUT, OVERDUE) AND expectedReturnDate >= now`, nearest first |
+| Editor's current booking | earliest live booking | `status IN (RESERVED, READY_FOR_HANDOVER, CHECKED_OUT, OVERDUE, RETURN_INSPECTION)` ordered by `bookingStart` |
+| Recent activity | `audit_logs` | newest ten; sign-in/out/password events only for `admin.audit.read`; only action, entity, actor, summary, time are selected |
+
+`booking.overdueGraceHours` (24) is **not** applied to the dashboard: the
+dashboard is meant to be timely, so a kit one hour late shows as overdue. The
+grace period governs when the nightly sweep (Phase 7) flips the stored status
+to `OVERDUE` and when notifications fire. Within the grace window a booking
+therefore appears in *Overdue* here while its status still reads
+"Checked out" - the badge makes that visible rather than hiding it.
+
+### 12.4 Queries and indexes
+
+Ten queries for an administrator, three for an editor, all issued concurrently
+and each bounded by a `take`. No query loads a table to count in JavaScript
+and no query runs per row.
+
+| Query | Index used |
+|---|---|
+| kits `GROUP BY status` | `kits(status)` |
+| assets in maintenance | `assets(status)` |
+| active maintenance records | `maintenance_records(status, scheduledFor)` |
+| open issues count + list | `issues_open_by_reported_at` (partial, `reportedAt DESC`) |
+| overdue count + list | `bookings_active_by_expected_return` (partial: live statuses, `expectedReturnDate`) |
+| upcoming returns | same partial index, range scan from `now` |
+| today's bookings | `bookings(bookingStart, bookingEnd)` and `bookings(status, expectedReturnDate)` (bitmap OR) |
+| editor current / history | `bookings(editorId)` |
+| recent activity | `audit_logs(createdAt)`, `audit_logs(action, createdAt)` |
+
+No new index was added. Every predicate matches an index created in Phase 1,
+and at this system's volume (hundreds of bookings a year) the planner will
+choose sequential scans anyway; adding indexes without a measured need would
+only slow writes.
+
+### 12.5 Login redesign
+
+The sign-in screen shares the shell's identity: a slate-950 canvas, the EK
+mark, the application name and the tagline "Equipment Handover & Return
+Management" in a branded panel beside a white card (split layout from `lg`,
+stacked with a compact brand header below it). The card carries only what the
+form needs - heading, email, password with show/hide, validation and the
+generic failure message, the submit button with its pending state - and a
+one-line "Internal use only · Access is logged" footer. Nothing about the
+environment, database, seeded accounts or permissions is rendered. The form
+component and every server-side behaviour (validation, anti-enumeration,
+lockout, rate limiting, callbackUrl, session) are unchanged from Phase 2.
+
+### 12.6 Tests
+
+`tests/integration/dashboard.test.ts` seeds kits in every status, assets and
+maintenance records, open/investigating/resolved issues, bookings for two
+editors (overdue by time, flagged OVERDUE, two upcoming returns created out of
+order, a collection at 00:30 Dubai, one at 23:30 Dubai the previous day, one
+cancelled, one tomorrow) and fourteen audit rows - inside a rolled-back
+transaction - and asserts the deltas for ADMIN, ENGINEER, VIEWER and two
+EDITORs, the Dubai-vs-UTC "today" boundary, ordering, limits, empty states and
+that no sensitive field leaves the DAL. `tests/unit/datetime.test.ts` covers
+the helper including DST transition days. `tests/component/pull-cord-theme-toggle.test.tsx`
+renders the theme switch inside the real provider under jsdom: initial theme
+from the system preference, a stored choice winning over it, click, Enter and
+Space toggling with the label and `localStorage` following, a pull past the
+threshold toggling exactly once, a short pull doing nothing, and the cord
+clamped at its maximum. 114 tests in 14 files pass.
+
+### 12.7 Theme switch
+
+`src/components/theme/theme-provider.tsx` wraps `next-themes` (AD-15).
+`src/components/theme/pull-cord-theme-toggle.tsx` is the control: one
+`<button>` drawing a bulb, a cord and a handle in SVG. Pointer Events give the
+same gesture to mouse, touch and stylus - `pointerdown` captures the pointer,
+`pointermove` stretches the cord (clamped at 40 px), `pointerup` past 24 px
+toggles and the cord springs back (220 ms). A tap, Enter or Space toggles
+through the button's native click; a drag that fell short does nothing and
+suppresses the trailing click so nothing toggles twice. Gesture state lives in
+refs so fast pointer sequences cannot outrun a render. `aria-label` reads
+"Switch to light mode" / "Switch to dark mode"; `touch-action: none` is set on
+the control only, never on the page. With `prefers-reduced-motion` the cord
+still follows the finger (direct manipulation) but the spring-back and the
+bulb nudge are disabled; the theme itself always switches. The control sits in
+the rail's bottom panel beside the user, and a 75 % version sits in the
+corner of the sign-in brand panel (and the mobile brand band).
+
+### 12.8 Design language
+
+The interface is meant to read as its own product, not a generic admin
+template:
+
+- **Identity:** deep navy rail in both modes; a single teal accent (`--accent`)
+  for the active marker, links, counts, the EK mark and focus rings; Manrope for
+  headings, brand and headline numbers, Inter for dense content.
+- **Surfaces:** cool off-white page (`#f3f5f9`) with white panels in light mode;
+  deep navy-black page (`#0b1120`) with slate-blue panels in dark mode. Panels
+  use a 14 px radius, a hairline border and a tinted header - no drop shadows.
+- **Rail:** 17.5 rem wide, brand block with the teal EK mark and the tagline,
+  grouped navigation with uppercase eyebrows ("Operations", "Administration"),
+  a teal left marker on the active item, and a bottom panel holding the user
+  (initials, name, role, sign-out) and the pull-cord.
+- **Top bar:** where you are (group eyebrow + section title), today's date,
+  the role chip and the user's initials - the page carries its own title block
+  with an eyebrow, a display-face heading and a one-line context.
+- **Dashboard rhythm:** one hairline-divided instrument strip for the six
+  headline numbers, a row of "Go to" shortcut chips, then framed panels -
+  overdue first when it exists, the day's collections and returns side by
+  side, issues beside an activity timeline with teal marker on the newest.
+- **Status:** square-cornered chips with a leading dot; red only for overdue
+  and critical.
+- **Empty states:** dashed frame, teal-tinted icon, one plain sentence.

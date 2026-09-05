@@ -1,3 +1,6 @@
+import { Construction } from 'lucide-react'
+
+import { EmptyState } from './empty-state'
 import { PageHeader } from './page-header'
 
 /**
@@ -17,11 +20,12 @@ export function PlaceholderPage({
   return (
     <>
       <PageHeader title={title} description={description} />
-      <div className="rounded-lg border border-dashed border-slate-300 bg-white px-6 py-16 text-center">
-        <p className="text-sm font-medium text-slate-700">Arrives in Phase {phase}</p>
-        <p className="mt-1 text-sm text-slate-500">
-          This section is protected today and will be populated when its phase is delivered.
-        </p>
+      <div className="rounded-panel border border-line bg-panel">
+        <EmptyState
+          icon={Construction}
+          title={`Arrives in Phase ${phase}`}
+          description="This section is protected today and will be populated when its phase is delivered."
+        />
       </div>
     </>
   )

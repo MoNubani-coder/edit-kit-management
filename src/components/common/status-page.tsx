@@ -17,9 +17,9 @@ export function StatusPage({
 }) {
   return (
     <div className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center px-6 py-16 text-center">
-      <p className="font-mono text-5xl font-semibold tracking-tight text-slate-300">{code}</p>
-      <h1 className="mt-4 text-xl font-semibold text-slate-900">{title}</h1>
-      <div className="mt-2 text-sm text-slate-600">{children}</div>
+      <p className="font-display text-6xl font-semibold tracking-tight text-line-strong">{code}</p>
+      <h1 className="mt-4 font-display text-xl font-semibold text-foreground">{title}</h1>
+      <div className="mt-2 text-sm text-muted">{children}</div>
       {action ? (
         <div className="mt-8">
           <Link href={action.href} className={buttonVariants({ variant: 'secondary' })}>

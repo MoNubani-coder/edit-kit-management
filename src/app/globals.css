@@ -1,20 +1,133 @@
 @import 'tailwindcss';
 
 /*
- * Design tokens.
+ * Design tokens - the Edit Kit Management System visual language.
  *
- * The full enterprise theme (shadcn/ui variables, status badge palette, dark
- * mode) lands with the application shell in Phase 3. This file currently holds
- * only what Phase 1 needs to render legibly.
+ * Semantic colours are CSS variables with a light and a dark value; Tailwind
+ * utilities (`bg-panel`, `text-muted`, `border-line`, ...) read them through the
+ * @theme block, so components never hard-code a palette and the pull-cord
+ * theme switch changes the whole interface by toggling one class on <html>.
  *
- * Note: no dark-mode block. Handover happens on tablets under warehouse
- * lighting, and a half-finished dark theme reads worse than none. Phase 3
- * introduces both themes together, deliberately.
+ * Identity: deep navy sidebar (constant in both modes), calm cool-grey
+ * surfaces, navy ink, and a single teal accent for the active state, links,
+ * counts and the EK mark. Manrope carries headings and headline numbers; Inter
+ * carries everything dense.
  */
+
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme inline {
   --font-sans: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-display), var(--font-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-subtle: var(--subtle);
+
+  --color-panel: var(--panel);
+  --color-panel-header: var(--panel-header);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-ring: var(--ring);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-muted: var(--sidebar-muted);
+  --color-sidebar-line: var(--sidebar-line);
+  --color-sidebar-active: var(--sidebar-active);
+
+  --radius-panel: 14px;
+}
+
+:root {
+  color-scheme: light;
+
+  --background: #f3f5f9;
+  --foreground: #0f1b33;
+  --muted: #5b6577;
+  --subtle: #8a93a5;
+
+  --panel: #ffffff;
+  --panel-header: #f7f9fc;
+  --line: #e2e7ef;
+  --line-strong: #c9d1de;
+
+  --primary: #0f1b33;
+  --primary-foreground: #ffffff;
+  --accent: #0e8a86;
+  --accent-soft: #e3f4f2;
+  --accent-foreground: #0b5f5c;
+  --ring: #0e8a86;
+
+  --sidebar: #0f1b33;
+  --sidebar-foreground: #f1f4f9;
+  --sidebar-muted: #93a0b8;
+  --sidebar-line: rgba(255, 255, 255, 0.08);
+  --sidebar-active: rgba(255, 255, 255, 0.06);
+}
+
+.dark {
+  color-scheme: dark;
+
+  --background: #0b1120;
+  --foreground: #e6ebf4;
+  --muted: #9aa6bb;
+  --subtle: #6f7b92;
+
+  --panel: #111a2e;
+  --panel-header: #14203a;
+  --line: #1f2b45;
+  --line-strong: #2c3a57;
+
+  --primary: #2fb8b3;
+  --primary-foreground: #06121f;
+  --accent: #2fb8b3;
+  --accent-soft: rgba(47, 184, 179, 0.14);
+  --accent-foreground: #7fe0dc;
+  --ring: #2fb8b3;
+
+  --sidebar: #0a1020;
+  --sidebar-foreground: #f1f4f9;
+  --sidebar-muted: #8b98b1;
+  --sidebar-line: rgba(255, 255, 255, 0.08);
+  --sidebar-active: rgba(255, 255, 255, 0.07);
+}
+
+/* Surfaces that should cross-fade when the theme changes. */
+.theme-transition {
+  transition:
+    background-color 240ms ease,
+    border-color 240ms ease,
+    color 240ms ease;
+}
+
+/* Pull-cord light bulb: a soft, local glow only. */
+.bulb-on {
+  filter: drop-shadow(0 0 6px rgba(251, 191, 36, 0.55));
+}
+
+@keyframes ek-bulb-nudge {
+  0% {
+    transform: translateY(0);
+  }
+  40% {
+    transform: translateY(2px);
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+
+.animate-bulb-nudge {
+  animation: ek-bulb-nudge 320ms ease-out;
 }
 
 /* Respect the reduced-motion preference everywhere by default. */

@@ -36,13 +36,17 @@ from the console.
 
 ---
 
-## Phase 3 — Application shell and dashboard
+## Phase 3 — Application shell and dashboard ✅ COMPLETE
 
-- shadcn/ui installed; sidebar + header + breadcrumbs; role-filtered navigation.
-- Shared primitives: `DataTable`, `StatusBadge`, `PageHeader`, `EmptyState`,
-  `ConfirmDialog`, `Stepper`.
-- Dashboard tiles (available / reserved / checked out / overdue / maintenance /
-  open issues) and the four activity panels.
+Delivered: the live, permission-aware dashboard (six KPI tiles from the
+database; today's bookings, upcoming returns, overdue, open issues, recent
+activity; an editor-specific view), the shared `StatusBadge`, `PageHeader` and
+`EmptyState` primitives, the business-time-zone helper, and the login page
+redesign. The shell (sidebar, header, role-filtered navigation) landed in
+Phase 2.
+
+Deferred, to be picked up with the first data-heavy screens in Phase 4:
+shadcn/ui adoption, `DataTable`, `ConfirmDialog`, `Stepper`, breadcrumbs.
 
 **Test:** tablet width (768–1024 px) is usable, not just narrow desktop.
 
@@ -152,8 +156,9 @@ handover → return, production Docker build, backup and restore runbook.
 - **Phase 8 is the risk concentration.** It is the largest phase, it owns the
   transactional integrity, and it is where R-4 and R-6 land. Budget accordingly.
 - **Phase 9 before Phase 10.** The return workflow reuses the signature pad.
-- **R-1 (how external editors sign) must be answered before Phase 8 starts.**
-  Everything up to that point is unaffected by the answer.
+- **R-1 (how external editors sign) is resolved:** external editors sign in
+  person on the authenticated engineer's tablet or device during handover and
+  return. No external `User` account is required. Phase 8 builds that flow.
 - **R-7 (maintenance records) is resolved.** `MaintenanceRecord` landed in the
   Phase 1 maintenance refinement, so Phase 4 builds the maintenance UI over an
   existing, constraint-tested table instead of retrofitting one.

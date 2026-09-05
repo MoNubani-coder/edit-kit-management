@@ -58,6 +58,7 @@ Requires Node.js ≥ 22.12 (LTS). Prisma 7 will not install on odd-numbered
 
 ## Project status
 
-**Phase 2 of 13 — Authentication and RBAC — complete.** Sign-in, sessions,
-the permission matrix and route protection are in place; Phase 3 (application
-shell and dashboard) is next. See [DEVELOPMENT.md](DEVELOPMENT.md).
+**Phase 3 of 13 — Dashboard and login redesign — complete.** Sign-in, sessions,
+the permission matrix, route protection and the live permission-aware
+dashboard are in place; Phase 4 (asset management) is next. See
+[DEVELOPMENT.md](DEVELOPMENT.md).

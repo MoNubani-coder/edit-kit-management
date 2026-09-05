@@ -9,10 +9,10 @@ export function Input({ className, invalid = false, ...props }: InputProps) {
     <input
       aria-invalid={invalid || undefined}
       className={cn(
-        'flex h-10 w-full rounded-md border bg-white px-3 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-60',
+        'flex h-10 w-full rounded-lg border bg-panel px-3 py-2 text-sm text-foreground shadow-sm placeholder:text-subtle transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-offset-panel disabled:cursor-not-allowed disabled:opacity-60',
         invalid
-          ? 'border-red-500 focus-visible:ring-red-500'
-          : 'border-slate-300 focus-visible:ring-slate-900',
+          ? 'border-rose-500 focus-visible:ring-rose-500'
+          : 'border-line-strong focus-visible:border-accent focus-visible:ring-ring',
         className,
       )}
       {...props}

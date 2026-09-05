@@ -87,7 +87,7 @@ export function LoginForm({ callbackUrl, notice }: LoginFormProps) {
           onChange={() => clientErrors.email && setClientErrors((errors) => ({ ...errors, email: undefined }))}
         />
         {fieldErrors.email ? (
-          <p id={`${emailId}-error`} className="text-xs text-red-600">
+          <p id={`${emailId}-error`} className="text-xs text-rose-600 dark:text-rose-300">
             {fieldErrors.email}
           </p>
         ) : null}
@@ -116,7 +116,7 @@ export function LoginForm({ callbackUrl, notice }: LoginFormProps) {
             aria-label={showPassword ? 'Hide password' : 'Show password'}
             aria-pressed={showPassword}
             tabIndex={-1}
-            className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-slate-500 hover:text-slate-800"
+            className="absolute inset-y-0 right-0 flex w-11 items-center justify-center rounded-r-lg text-subtle hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {showPassword ? (
               <EyeOff aria-hidden className="h-4 w-4" />
@@ -126,7 +126,7 @@ export function LoginForm({ callbackUrl, notice }: LoginFormProps) {
           </button>
         </div>
         {fieldErrors.password ? (
-          <p id={`${passwordId}-error`} className="text-xs text-red-600">
+          <p id={`${passwordId}-error`} className="text-xs text-rose-600 dark:text-rose-300">
             {fieldErrors.password}
           </p>
         ) : null}

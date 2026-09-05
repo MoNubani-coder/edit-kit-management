@@ -2,7 +2,6 @@ import type { Metadata } from 'next'
 import { redirect } from 'next/navigation'
 
 import { LoginForm } from '@/features/auth/components/login-form'
-import { env } from '@/lib/env'
 import { HOME_PATH, isSafeRedirectPath } from '@/server/auth/route-policy'
 import { getCurrentUser } from '@/server/auth/session'
 
@@ -32,18 +31,13 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
   const callbackUrl = first(params.callbackUrl)
 
   return (
-    <div className="w-full max-w-md">
-      <div className="mb-6 text-center">
-        <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-lg bg-slate-900 text-sm font-bold text-white">
-          EK
+    <div className="w-full max-w-[26rem]">
+      <div className="theme-transition rounded-panel border border-line bg-panel p-7 shadow-sm sm:p-9">
+        <div className="mb-7">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-accent-foreground">Welcome back</p>
+          <h2 className="mt-1 font-display text-2xl font-semibold tracking-tight text-foreground">Sign in</h2>
+          <p className="mt-1 text-sm text-muted">Use your internal account to continue.</p>
         </div>
-        <h1 className="mt-4 text-xl font-semibold tracking-tight text-slate-900">{env.APP_NAME}</h1>
-        <p className="mt-1 text-sm text-slate-600">{env.APP_ORG_NAME}</p>
-      </div>
-
-      <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
-        <h2 className="text-base font-semibold text-slate-900">Sign in</h2>
-        <p className="mb-6 mt-1 text-sm text-slate-600">Use your internal account to continue.</p>
 
         <LoginForm
           callbackUrl={isSafeRedirectPath(callbackUrl) ? callbackUrl : undefined}
@@ -51,9 +45,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         />
       </div>
 
-      <p className="mt-6 text-center text-xs text-slate-500">
-        Internal system. Access is logged. Contact Engineering for account requests.
-      </p>
+      <p className="mt-6 text-center text-xs text-subtle">Internal use only · Access is logged</p>
     </div>
   )
 }

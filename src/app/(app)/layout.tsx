@@ -1,7 +1,9 @@
 import type { ReactNode } from 'react'
 
 import { AppShell } from '@/components/layout/app-shell'
+import { APP_TAGLINE } from '@/lib/constants/branding'
 import { navigationFor } from '@/lib/constants/navigation'
+import { formatDate } from '@/lib/datetime'
 import { env } from '@/lib/env'
 import { requireAuthForPage } from '@/server/auth/page-guards'
 
@@ -18,6 +20,8 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   return (
     <AppShell
       appName={env.APP_NAME}
+      tagline={APP_TAGLINE}
+      todayLabel={formatDate(new Date(), env.APP_TIMEZONE)}
       user={{ name: actor.name, email: actor.email, role: actor.role }}
       sections={navigationFor(actor)}
     >

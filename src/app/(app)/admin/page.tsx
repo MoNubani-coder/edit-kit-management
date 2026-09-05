@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import { ArrowUpRight } from 'lucide-react'
 
 import { PageHeader } from '@/components/common/page-header'
 import { ADMIN_NAV } from '@/lib/constants/navigation'
@@ -14,16 +15,23 @@ export default async function AdminIndexPage() {
 
   return (
     <>
-      <PageHeader title="Administration" description="Accounts, reference data, audit trail and settings." />
+      <PageHeader
+        eyebrow="Administration"
+        title="Administration"
+        description="Accounts, reference data, audit trail and settings."
+      />
       <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {sections.map((item) => (
           <li key={item.href}>
             <Link
               href={item.href}
-              className="block rounded-lg border border-slate-200 bg-white p-5 shadow-sm transition-colors hover:border-slate-400"
+              className="group flex items-start justify-between gap-3 rounded-panel border border-line bg-panel p-5 transition-colors hover:border-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              <p className="text-sm font-semibold text-slate-900">{item.label}</p>
-              <p className="mt-1 font-mono text-[11px] text-slate-500">{item.anyOf.join(', ')}</p>
+              <span>
+                <span className="block font-display text-sm font-semibold text-foreground">{item.label}</span>
+                <span className="mt-1 block text-xs text-muted">{item.description}</span>
+              </span>
+              <ArrowUpRight aria-hidden className="h-4 w-4 shrink-0 text-subtle transition-colors group-hover:text-accent-foreground" />
             </Link>
           </li>
         ))}

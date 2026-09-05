@@ -4,19 +4,19 @@ import type { ComponentProps } from 'react'
 import { cn } from '@/lib/utils/cn'
 
 /**
- * Minimal button primitive for Phase 2. Replaced by the shadcn/ui set when the
- * full design system lands in Phase 3; the variant names are chosen to match.
+ * Button primitive. Colours come from the theme tokens, so the same variant is
+ * navy-on-white in light mode and teal-on-navy in dark mode.
  */
 
 export const buttonVariants = cva(
-  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-60',
+  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-60',
   {
     variants: {
       variant: {
-        primary: 'bg-slate-900 text-white shadow-sm hover:bg-slate-800',
-        secondary: 'border border-slate-300 bg-white text-slate-900 shadow-sm hover:bg-slate-50',
-        ghost: 'text-slate-700 hover:bg-slate-100 hover:text-slate-900',
-        danger: 'bg-red-600 text-white shadow-sm hover:bg-red-700',
+        primary: 'bg-primary text-primary-foreground shadow-sm hover:opacity-90',
+        secondary: 'border border-line-strong bg-panel text-foreground hover:bg-panel-header',
+        ghost: 'text-muted hover:bg-panel-header hover:text-foreground',
+        danger: 'bg-rose-600 text-white shadow-sm hover:bg-rose-700',
       },
       size: {
         sm: 'h-8 px-3 text-xs',

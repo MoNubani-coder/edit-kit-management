@@ -1,12 +1,23 @@
 import type { Metadata, Viewport } from 'next'
-import { Inter } from 'next/font/google'
+import { Inter, Manrope } from 'next/font/google'
+import { headers } from 'next/headers'
+import type { ReactNode } from 'react'
+
+import { ThemeProvider } from '@/components/theme/theme-provider'
 
 import './globals.css'
 
 // Inter reads well in dense enterprise tables at small sizes, which is most of
-// what this application is.
+// what this application is. Manrope carries headings, the brand and headline
+// numbers, giving the product its own voice without hurting legibility.
 const inter = Inter({
   variable: '--font-sans',
+  subsets: ['latin'],
+  display: 'swap',
+})
+
+const manrope = Manrope({
+  variable: '--font-display',
   subsets: ['latin'],
   display: 'swap',
 })
@@ -30,11 +41,16 @@ export const viewport: Viewport = {
   maximumScale: 5,
 }
 
-export default function RootLayout({ children }: LayoutProps<'/'>) {
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  // The CSP nonce minted by proxy.ts; next-themes attaches it to its anti-flash script.
+  const nonce = (await headers()).get('x-nonce') ?? undefined
+
   return (
-    <html lang="en" className={`${inter.variable} h-full antialiased`}>
-      <body className="bg-slate-50 text-slate-900 min-h-full flex flex-col font-sans">
-        {children}
+    // suppressHydrationWarning: next-themes sets the theme class on <html>
+    // before React hydrates, which is exactly the mismatch we want.
+    <html lang="en" suppressHydrationWarning className={`${inter.variable} ${manrope.variable} h-full antialiased`}>
+      <body className="theme-transition flex min-h-full flex-col bg-background font-sans text-foreground">
+        <ThemeProvider nonce={nonce}>{children}</ThemeProvider>
       </body>
     </html>
   )
