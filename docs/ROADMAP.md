@@ -112,10 +112,27 @@ Automated (24 tests).
 
 ---
 
-## Phase 7 — Booking management
+## Phase 7 — Booking management ✅ COMPLETE
 
-Booking CRUD, `BK-YYYY-NNNNNN`, kit availability calendar, checklist snapshot on
-creation, status transitions, cancellation.
+Delivered on the top-navigation shell: the booking workspace with eleven
+status tabs and counts, search by booking number, editor, staff ID, kit code,
+kit name and kit barcode, sort and server-side pagination; the four-section
+create flow (editor picker from Phase 6, kit picker with the Phase 5 readiness
+verdict and upcoming bookings, Dubai wall-clock schedule, review) saving as a
+draft or reserving directly; `BK-YYYY-NNNNNN` allocated in the transaction;
+explicit lifecycle operations (reserve, release, ready for handover with the
+kit set aside, revert, cancel with a reason); edit within the lifecycle with
+re-validation; overlap pre-check with the exclusion constraint as the
+authority (half-open window - back-to-back bookings are adjacent, any shared
+moment overlaps);
+derived overdue and due-soon; the booking workspace with Overview, Equipment
+and Activity. The checklist snapshot moves to the handover (Phase 8) so the
+checks match the moment of inspection; the kit availability *calendar* view
+remains future scope - the kit picker lists upcoming bookings instead.
+
+**Test:** two overlapping reservations for one kit cannot both exist, however
+they are submitted; one starting the instant the other ends can. Automated
+(27 tests).
 
 **Test:** two overlapping bookings on one kit are rejected — including when both
 are submitted at the same moment (the exclusion constraint, not a UI check).

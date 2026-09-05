@@ -243,7 +243,7 @@ export const KIT_AVAILABILITY_LABEL: Record<KitAvailabilityState, string> = {
  * with no maintenance in progress or on hold. Problems with optional members
  * are reported as warnings and do not block.
  */
-export function evaluateKitAvailability(facts: KitAvailabilityFacts): KitAvailability {
+export function evaluateKitAvailability(facts: KitAvailabilityFacts, now: Date = new Date()): KitAvailability {
   const reasons: KitAvailabilityReason[] = []
   const kitLevel = (code: KitAvailabilityReasonCode, reason: string) =>
     reasons.push({ code, severity: 'blocking', assetId: null, assetCode: null, slotLabel: null, reason })
@@ -254,7 +254,10 @@ export function evaluateKitAvailability(facts: KitAvailabilityFacts): KitAvailab
   const out = new Set<string>(OUT_BOOKING_STATUSES)
   let state: KitAvailabilityState = 'unavailable'
 
-  if (facts.liveBooking) {
+  // A reservation that has not started yet does not hold the kit today; the
+  // booking window check (bookings.service) is what protects that future slot.
+  const holding = facts.liveBooking && (out.has(facts.liveBooking.status) || facts.liveBooking.status === 'READY_FOR_HANDOVER' || facts.liveBooking.bookingStart.getTime() <= now.getTime())
+  if (facts.liveBooking && holding) {
     const booking = facts.liveBooking
     if (facts.status === KitStatus.CHECKED_OUT || out.has(booking.status)) {
       state = 'out'
@@ -306,6 +309,18 @@ export function evaluateKitAvailability(facts: KitAvailabilityFacts): KitAvailab
     memberCount: facts.members.length,
     requiredCount: facts.members.filter((member) => member.isRequired).length,
   }
+}
+
+/**
+ * Structural readiness for a booking window: the same rule with the current
+ * booking hold and the RESERVED / CHECKED_OUT kit statuses set aside, because
+ * those describe *today*; whether the requested window is free is the overlap
+ * check in bookings.service. Everything else - retired, maintenance, damaged,
+ * removed kit; required members unavailable - still blocks.
+ */
+export function evaluateKitReadinessForBooking(facts: KitAvailabilityFacts): KitAvailability {
+  const status = facts.status === KitStatus.RESERVED || facts.status === KitStatus.CHECKED_OUT ? KitStatus.AVAILABLE : facts.status
+  return evaluateKitAvailability({ ...facts, status, liveBooking: null })
 }
 
 /** Availability for one kit, straight from the database. Reused by the booking phases. */

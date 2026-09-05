@@ -190,3 +190,25 @@ export function describeDue(expected: Date, now: Date, timeZone: string): DueDes
   if (days === 1) return { label: `Due tomorrow, ${time}`, tone: 'neutral' }
   return { label: `Due ${formatDate(expected, timeZone)}`, tone: 'neutral' }
 }
+
+/**
+ * A wall-clock reading typed into a `datetime-local` input (`YYYY-MM-DDTHH:mm`)
+ * in `timeZone`, as an instant. Two passes through the offset handle the
+ * hour around a DST transition; `null` when the text is not a date.
+ */
+export function zonedLocalToDate(local: string, timeZone: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(local.trim())
+  if (!match) return null
+  const [, year, month, day, hour, minute, second] = match.map(Number)
+  const guess = Date.UTC(year, month - 1, day, hour, minute, second || 0)
+  if (Number.isNaN(guess)) return null
+  const first = new Date(guess - timeZoneOffsetMs(new Date(guess), timeZone))
+  const date = new Date(guess - timeZoneOffsetMs(first, timeZone))
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+/** The inverse: an instant as the `datetime-local` value for `timeZone`. */
+export function toZonedLocalInput(date: Date, timeZone: string): string {
+  const parts = zonedParts(date, timeZone)
+  return `${parts.year}-${pad(parts.month)}-${pad(parts.day)}T${pad(parts.hour)}:${pad(parts.minute)}`
+}

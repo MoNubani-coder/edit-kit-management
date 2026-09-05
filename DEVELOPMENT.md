@@ -2,12 +2,12 @@
 
 Running log of what exists, what to test, and what comes next.
 
-- **Current phase:** 6 of 13 — Editor management — ✅ **complete**
-- **Status:** verified against PostgreSQL 16.15 — five migrations applied, zero
-  drift, 30/30 database constraint tests, 198/198 Vitest tests (two consecutive
-  runs, database and numbering counters unchanged), typecheck + lint clean,
-  production build clean
-- **Last updated:** 2026-09-05 (Phase 6)
+- **Current phase:** 7 of 13 — Booking management — ✅ **complete**
+- **Status:** verified against PostgreSQL 16.15 — six migrations applied (one
+  new in Phase 7: the half-open booking window), zero drift, 31/31 database
+  constraint tests, 237/237 Vitest tests (two consecutive runs, database and
+  numbering counters unchanged), typecheck + lint clean, production build clean
+- **Last updated:** 2026-09-05 (Phase 7)
 
 Companion documents: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (design and
 rationale) · [docs/ROADMAP.md](docs/ROADMAP.md) (all 13 phases).
@@ -110,7 +110,7 @@ once.
 ### 3. Migrate and seed
 
 ```powershell
-npm run db:migrate     # applies all five migrations
+npm run db:migrate     # applies all six migrations
 npm run db:seed        # idempotent - safe to re-run
 npm run dev
 ```
@@ -319,7 +319,8 @@ rolls back — safe to run any time):
 
 1. Overlapping `RESERVED` bookings on one kit → rejected by the exclusion constraint
 1b. Overlapping `CANCELLED` booking → allowed (cancelled bookings don't hold the kit)
-1c. Adjacent, non-overlapping booking → allowed
+1c. Adjacent booking starting the instant the previous one ends → allowed (half-open window, Phase 7)
+1d. Zero-length booking (start = end) → rejected
 2. `bookingEnd < bookingStart` → rejected
 3. Second live `HANDOVER` inspection on one booking → rejected; **allowed after voiding the first**
 4. Same asset in two kits → rejected
@@ -863,8 +864,8 @@ Phase 7 will use. Design in
 | `npm test` run 1 (20 files) | ✅ **198 / 198** |
 | `npm test` run 2 (20 files) | ✅ **198 / 198** |
 | Database after both runs | ✅ ASSET counter 14 and MAINTENANCE counter 1 before and after; 3 editors, 6 users, 0 bookings, 33 audit rows, 0 test editors / users / bookings / editor audit rows |
-| `scripts/db/verify-constraints.sql` | ✅ 30 / 30 PASS, rolled back |
-| `prisma migrate status` | ✅ 5 migrations, up to date |
+| `scripts/db/verify-constraints.sql` | ✅ 31 / 31 PASS, rolled back (1c proves the exact adjacent case, 1d the strict period) |
+| `prisma migrate status` | ✅ 6 migrations, up to date |
 | `prisma migrate diff --exit-code` | ✅ No difference detected |
 | `npm run check` | ✅ clean |
 | `npm run build` | ✅ clean, all editor routes compiled |
@@ -933,24 +934,191 @@ mutation redirects on success and returns a typed result on failure.
 
 ---
 
-## Next: Phase 7 — Booking management
+## Line endings
 
-Booking CRUD with `BK-YYYY-NNNNNN`, the kit availability calendar, the
-checklist snapshot on creation, status transitions and cancellation - on the
-top-navigation shell with the Bookings tabs already in place. Uses
-`getKitAvailability` (Phase 5) before reserving a kit and
-`searchEditorsForPicker` (Phase 6) to choose the editor; only active editors
-and ready kits may be booked.
+`.gitattributes` (added in Phase 7) normalises every text file to LF in the
+repository and on checkout (`* text=auto eol=lf`); Windows-only scripts
+(`*.bat`, `*.cmd`, `*.ps1`) keep CRLF and binary assets are never converted.
+This ends the "LF will be replaced by CRLF" warnings on Windows and makes the
+WSL, Linux container and Windows checkouts byte-identical. Existing files were
+**not** mass-rewritten: they are already LF in the repository. If a stray CRLF
+file ever appears, `git add --renormalize .` in a dedicated commit fixes it.
+Editors should follow the file (VS Code honours `.gitattributes` through
+`files.eol: auto`).
+
+---
+
+## Phase 7 — Booking management (complete)
+
+Reservations before handover on the top-navigation shell: the booking
+workspace with status tabs and counts, search and server-side pagination; the
+four-section create flow (editor, kit, schedule, review); explicit lifecycle
+operations; edit within the lifecycle; cancellation with a reason; derived
+overdue and due-soon; the booking workspace with Overview, Equipment and
+Activity. Design in
+[docs/ARCHITECTURE.md §16](docs/ARCHITECTURE.md#16-bookings-phase-7) and AD-19.
+
+**What exists**
+
+- No migration. `BOOKING_CREATED`, `BOOKING_UPDATED`, `BOOKING_STATUS_CHANGED`,
+  `BOOKING_CANCELLED` and `KIT_STATUS_CHANGED` already existed; `Booking`
+  already carried `engineerId`, `collectionDate`, `expectedReturnDate`,
+  `cancelledAt` and `cancelReason`.
+- `src/lib/booking-rules.ts` - pure lifecycle table (`MANUAL_TRANSITIONS`,
+  `editScopeFor`, `isCancellable`), holding statuses, `isBookingOverdue`,
+  `isDueSoon`, half-open `rangesOverlap`, `scheduleErrors`,
+  `editorBookingBlocker`.
+- `src/lib/validation/bookings.ts` - create / update / cancel schemas with
+  `datetime-local` inputs, `parseSchedule` (Dubai wall-clock → instants),
+  list and tab parameters. `src/lib/datetime.ts` gained `zonedLocalToDate`
+  and `toZonedLocalInput`. `src/lib/env.ts` gained `BOOKING_DUE_SOON_HOURS`
+  (default 48).
+- `src/server/dal/bookings.dal.ts` (extended) - paginated, sorted workspace
+  list with the new filter set, tab counts, detail, `findOverlappingBookings`,
+  lifecycle context, engineer lookups, bookable-editor lookup, activity.
+  `kits.dal.ts` gained `searchKitCandidates` (kit picker with readiness facts
+  and upcoming bookings). `kits.service.ts` gained
+  `evaluateKitReadinessForBooking` and a window-aware `evaluateKitAvailability`.
+- `src/server/services/bookings.service.ts` - `createBooking` (draft or
+  reserve), `reserveBooking`, `returnToDraft`, `markReadyForHandover`,
+  `revertReadyForHandover`, `updateBooking`, `cancelBooking`,
+  `translateBookingDbError`, `bookingTimeState`; loaders and picker searches.
+- `src/server/actions/bookings.actions.ts` - seven actions, all through
+  `action()` with `booking.create` / `booking.update` / `booking.cancel`.
+- Pages: `/bookings` (rebuilt), `/bookings/new`, `/bookings/[id]` (tabs),
+  `/bookings/[id]/edit`.
+- `src/features/bookings/` - `hrefs.ts`; components: toolbar, table, time
+  badge, schedule block, editor picker, kit picker, booking form, action forms
+  (transitions and cancellation), overview, equipment (read-only), activity.
+- Tests: `tests/integration/bookings.service.test.ts`,
+  `tests/integration/bookings.actions.test.ts`,
+  `tests/integration/bookings.boundary.test.ts` (the exact adjacent-booking
+  case); the Phase 2 `bookings-scope.test.ts` is unchanged and still passes.
+- Migration `20260905230000_booking_half_open_window` (boundary fix, applied
+  after the first Phase 7 report): re-creates
+  `bookings_no_overlapping_period_per_kit` with a half-open range, `'[)'`, so
+  a booking 10:00–12:00 and the next one 12:00–14:00 on the same kit are both
+  allowed, and tightens `bookings_period_is_ordered` to `bookingEnd >
+  bookingStart` so an empty range cannot bypass the constraint. The earlier
+  report's "touching periods overlap" described the closed range Phase 1 had
+  shipped; it is no longer the behaviour.
+
+**Verification — Phase 7 (2026-09-05)**
+
+| Check | Result |
+|---|---|
+| `npm test` run 1 (25 files) | ✅ **237 / 237** |
+| `npm test` run 2 (25 files) | ✅ **237 / 237** |
+| Database after both runs | ✅ ASSET 14 and MAINTENANCE 1 counters unchanged, no BOOKING counter row created; 0 bookings, 1 kit, 12 assets, 3 editors, 6 users, 33 audit rows before and after |
+| `scripts/db/verify-constraints.sql` | ✅ 30 / 30 PASS, rolled back |
+| `prisma migrate status` | ✅ 5 migrations, up to date |
+| `prisma migrate diff --exit-code` | ✅ No difference detected |
+| `npm run check` | ✅ clean |
+| `npm run build` | ✅ clean, all booking routes compiled |
+
+**What the 27 booking tests prove** (`npm test`; every write inside a
+rolled-back transaction, so even the BK numbers come back):
+
+*Numbering and creation* — `BK-YYYY-NNNNNN` in sequence; a draft holds nothing;
+a reservation is audited twice (created, then Draft → Reserved) and leaves the
+kit status alone; an active external editor with no staff ID can be booked; an
+internal editor without one, an inactive editor, a removed editor, an unknown
+editor and an unknown engineer cannot.
+
+*Readiness and schedule* — damaged required equipment, active maintenance and
+a retired kit refuse a reservation (a draft is still allowed); end before
+start, return after end, collection after end, collection more than 24 h
+early, return before collection and a malformed date are refused before any
+number is consumed.
+
+*Overlap* — an overlapping reservation names the booking in the way; the
+window is half-open, so A 10:00–12:00 and B 12:00–14:00 on one kit both
+reserve (service, pre-check and constraint), a draft over the same window and
+a booking after a cancellation all succeed, one shared minute is refused; a write that bypasses
+the pre-check is refused by the exclusion constraint and translated into a
+friendly conflict.
+
+*Workspace* — search by booking number, editor name, staff ID, kit code and
+kit barcode; status, due-soon and overdue filters with tab counts; sort and
+pagination; overdue and due-soon flags per row; an EDITOR sees only their own
+booking and cannot search out of scope; no read exposes credentials or ids.
+
+*Lifecycle* — moving a reservation onto another's window is refused, moving
+it elsewhere is audited, swapping in a blocked kit is refused; a booking that
+is ready for handover accepts engineer and notes only; completed bookings are
+read-only; reserve, release, ready (kit set aside), revert (kit released) and
+cancel (kit released, row kept, reason recorded) all behave; cancelled and
+checked-out bookings refuse further Phase 7 transitions; the timeline is
+newest first with the cancellation reason on top.
+
+*Authorisation* — anonymous rejected; VIEWER reads but cannot create or
+cancel; EDITOR cannot create and sees only their own; ENGINEER creates and
+edits; ADMIN reserves and cancels; an overlapping reservation through the
+action layer returns a sentence, not a stack trace.
+
+**Decisions taken in Phase 7**
+
+| Decision | Reason |
+|---|---|
+| Create as DRAFT or directly RESERVED; drafts hold nothing | Planners pencil jobs in before the window is settled; the exclusion constraint already excluded DRAFT |
+| Booking windows are half-open, [start, end): back-to-back bookings are adjacent, not overlapping | The requirement is that 10:00–12:00 and 12:00–14:00 on one kit both exist; the Phase 1 closed range was replaced by migration, the period check made strict, and the constraint suite and a dedicated test prove the boundary |
+| External editors need no staff ID; internal editors do | Phase 7 decision; the handover document and the account link key on the internal staff ID |
+| No company field required for external editors | Phase 7 decision; future scope |
+| READY_FOR_HANDOVER sets `Kit.status` to RESERVED | "Ready" means the kit is physically set aside; a plain reservation for a future window leaves the kit on the shelf |
+| Overdue is derived at read time; no scheduled sweep | Phase 7 decision; `isBookingOverdue` and the dashboard's `overdueWhere` are the same rule |
+| Due soon = `BOOKING_DUE_SOON_HOURS` (48) in one env setting | One number, read by the filter, the tab count and the dashboard |
+| Checklist snapshot deferred to the handover (Phase 8) | Copying the template at handover start guarantees the checks match the moment of inspection; `Booking.checklistTemplateId` is set now for information |
+| `kit.manage` stays ADMIN-only | Phase 7 decision |
+| Cancellation from DRAFT, RESERVED or READY_FOR_HANDOVER only | Anything out with an editor is closed by the return workflow |
+
+**Manual browser checks worth doing**
+
+- [ ] `/bookings` as ADMIN: eleven tabs with counts, search by `MBP-02`,
+  by an editor's name and by `ADM-DEMO-KIT-0002`; sort by Start and Expected
+  return; both themes; tablet width scrolls the table, not the page.
+- [ ] `/bookings/new`: search `EDT-2210` → Layla Hassan (Internal) selectable;
+  search an external editor with no staff ID → selectable; search `MBP-02` →
+  Ready with 12 items and its upcoming bookings; set a window and *Reserve
+  kit* → lands on the booking as Reserved.
+- [ ] Try to reserve `MBP-02` again for an overlapping window → the form shows
+  "already booked under BK-…"; a window starting right after the previous end
+  succeeds; end before start and return after end show field errors.
+- [ ] Mark a required asset DAMAGED on the equipment workspace → the kit picker
+  shows "Not ready" with the asset named and no Select button; a draft can
+  still be saved, *Reserve kit* on it is refused with the reason.
+- [ ] Booking detail: schedule strip, editor and kit panels with Open links,
+  Equipment tab read-only, Activity newest first; *Mark ready for handover*
+  sets the kit to Reserved on `/kits`; *Back to reserved* releases it; cancel
+  with a reason keeps the row as Cancelled.
+- [ ] Edit a reservation's window onto another booking → refused; edit notes
+  on a ready booking → allowed; schedule fields read-only there.
+- [ ] As the seeded EDITOR (`editor@example.ae`): `/bookings` lists only their
+  bookings, another booking's URL is 404, no New booking button. As VIEWER:
+  list only. As ENGINEER: create, edit, cancel.
+- [ ] Set an expected return in the past on a CHECKED_OUT booking (psql) →
+  Overdue badge on the list, the detail and the dashboard agree.
+
+---
+
+## Next: Phase 8 — Handover
+
+The handover inspection: start from a READY_FOR_HANDOVER booking, snapshot the
+kit's equipment, accessories, software and the checklist template into the
+inspection rows, record each line's condition, capture the two signatures on
+the engineer's device (R-1), freeze the document, set the booking to
+CHECKED_OUT and the kit and its assets to CHECKED_OUT - all in one
+transaction (AD-8). `/bookings/[id]/handover` and the Phase 7 "Handover
+arrives with Phase 8" note are the entry points.
 
 **Open decisions carried forward**
 
 - Whether ENGINEER may manage kits (`kit.manage`) — still ADMIN only.
 - Whether removing an asset from a kit should also be offered from the
   equipment workspace (today it is a kit operation only).
-- Whether the nightly overdue sweep (R-3) lands with bookings in Phase 7 or
-  earlier as a standalone job.
-- Whether a booking may be created for an editor without a staff ID, and
-  whether external editors need a company recorded before their first booking.
+- Whether the nightly overdue sweep (R-3) is needed at all now that overdue is
+  derived at read time, or only for notifications.
+- Whether a booking should snapshot the kit's software list at reservation for
+  planning, or only at handover (today: handover).
 - Rate-limit store for multi-instance deployment, if the target is more than
   one container.
 - Hard-deleting a user who has ever signed in fails: `audit_logs.actorUserId`

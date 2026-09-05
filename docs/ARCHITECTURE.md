@@ -1,6 +1,6 @@
 # Edit Kit Management System — Architecture
 
-**Status:** Phase 6 (editor management) — complete. Phases 1–5 — complete.
+**Status:** Phase 7 (booking management) — complete. Phases 1–6 — complete.
 **Last updated:** 2026-09-05
 
 ---
@@ -351,12 +351,19 @@ under concurrent requests, and even if someone writes to the database by hand.
 ALTER TABLE bookings ADD CONSTRAINT bookings_no_overlap
   EXCLUDE USING gist (
     "kitId" WITH =,
-    tstzrange("bookingStart", "bookingEnd", '[]') WITH &&
+    tstzrange("bookingStart", "bookingEnd", '[)') WITH &&
   ) WHERE (status IN ('RESERVED','READY_FOR_HANDOVER','CHECKED_OUT','OVERDUE','RETURN_INSPECTION')
            AND "deletedAt" IS NULL);
 ```
 
-Requires the `btree_gist` extension. Two engineers reserving MBP-02 for
+The window is half-open, `[start, end)`: the kit is held from the start
+instant up to, but not including, the end instant, so a booking 10:00–12:00 and
+the next one 12:00–14:00 on the same kit are adjacent, not overlapping, while
+any shared moment is refused. Phase 1 shipped a closed range (`'[]'`); Phase 7
+replaced it by migration `20260905230000_booking_half_open_window`, which also
+tightened `bookings_period_is_ordered` to `bookingEnd > bookingStart` so an
+empty range can never slip past the constraint. Requires the `btree_gist`
+extension. Two engineers reserving MBP-02 for
 overlapping weeks now fails at commit rather than producing a double-booked kit
 that nobody notices until collection day.
 
@@ -634,6 +641,30 @@ reads profiles, not users; and Phase 8 signatures point at
 `signerEditorProfileId` with a name snapshot, exactly as the schema already
 provides.
 
+### AD-19 — A reservation is a window, checked twice
+
+**Decision.** Whether a kit can be reserved is two separate questions asked in
+one transaction: *is the kit structurally ready* (the Phase 5 rule with the
+current hold set aside - `evaluateKitReadinessForBooking`) and *is the window
+free* (`findOverlappingBookings`, the same half-open predicate as the
+database exclusion constraint). The service answers both with sentences; the
+constraint `bookings_no_overlapping_period_per_kit` decides when two
+transactions race, and its refusal is translated into the same kind of
+sentence.
+
+**Why.** Availability "right now" and availability "for next week" are
+different facts. Folding the live booking into readiness would make a kit that
+is out today unbookable for a window after it returns; dropping the pre-check
+would leave the operator with a bare constraint error. Two checks with one
+authority give explainable refusals without ever trusting the pre-check for
+correctness.
+
+**Consequence.** A DRAFT is outside the constraint's status set and holds
+nothing; reserving is the moment the window is claimed. The window is
+half-open, [start, end): a booking that ends at 12:00 and one that starts at
+12:00 on the same kit are adjacent and both allowed; the return inspection of
+the first is what physically frees the kit for the second.
+
 ## 6. Folder structure
 
 ```
@@ -651,7 +682,8 @@ edit-kit-management/
 │  │  ├─ 20260903000100_integrity_constraints_and_search_indexes/
 │  │  ├─ 20260903000200_maintenance_records/
 │  │  ├─ 20260905134441_kit_audit_actions/   # five AuditAction values (Phase 5)
-│  │  └─ 20260905143330_editor_audit_actions/ # three AuditAction values (Phase 6)
+│  │  ├─ 20260905143330_editor_audit_actions/ # three AuditAction values (Phase 6)
+│  │  └─ 20260905230000_booking_half_open_window/ # exclusion constraint [start, end), strict period check (Phase 7)
 │  └─ seed/
 │     ├─ index.ts                   # orchestrator
 │     ├─ 01-users.ts
@@ -698,6 +730,9 @@ edit-kit-management/
 │  │  │                                   #   member / software / checklist forms, history)
 │  │  ├─ editors/                         # Phase 6: hrefs.ts + components (badges, toolbar, table, form,
 │  │  │                                   #   overview, account forms, action forms, bookings, issues, activity)
+│  │  ├─ bookings/                        # Phase 7: hrefs.ts + components (toolbar, table, time badge, schedule
+│  │  │                                   #   block, editor picker, kit picker, form, action forms, overview,
+│  │  │                                   #   equipment, activity)
 │  │  ├─ admin/components/                # admin-tabs, category-form, category-active-toggle
 │  │  ├─ bookings/  kits/  assets/  editors/  issues/
 │  │  ├─ inspections/               # the wizard lives here
@@ -722,13 +757,14 @@ edit-kit-management/
 │  │  │  └─ errors.ts               #   UnauthorizedError / ForbiddenError
 │  │  ├─ dal/                       # authorised reads (bookings, dashboard, assets, catalogue, kits, editors)
 │  │  ├─ actions/                   # server actions (auth, admin-users, assets, accessories, categories,
-│  │  │                             #   kits, kit-composition, editors)
+│  │  │                             #   kits, kit-composition, editors, bookings)
 │  │  ├─ services/                  # business logic, transaction-aware
 │  │  │  ├─ dashboard.service.ts    # Phase 3: buildDashboard (permission-gated assembly)
 │  │  │  ├─ assets.service.ts       # Phase 4: lifecycle rules, create/update/remove, accessories
 │  │  │  ├─ categories.service.ts   # Phase 4: create/update/activate categories
 │  │  │  ├─ kits.service.ts         # Phase 5: kit lifecycle, assignment rules, availability, composition
 │  │  │  ├─ editors.service.ts      # Phase 6: editor lifecycle, account linking, deactivation, picker
+│  │  │  ├─ bookings.service.ts     # Phase 7: reservation gate, explicit transitions, edit, cancellation
 │  │  │  ├─ errors.ts               # DomainError + unique-violation mapping
 │  │  │  ├─ booking.service.ts
 │  │  │  ├─ handover.service.ts
@@ -743,7 +779,8 @@ edit-kit-management/
 │  │
 │  ├─ lib/
 │  │  ├─ env.ts                     # zod-validated environment
-│  │  ├─ datetime.ts                # Phase 3: business time zone helpers (AD-13)
+│  │  ├─ datetime.ts                # Phase 3: business time zone helpers (AD-13); Phase 7 wall-clock ↔ instant
+│  │  ├─ booking-rules.ts           # Phase 7: pure lifecycle table, overdue / due-soon, half-open overlap, schedule rules
 │  │  ├─ validation/                # zod schemas shared client + server
 │  │  ├─ constants/                 # status labels, colours, nav definition
 │  │  └─ utils/
@@ -1721,3 +1758,183 @@ cannot create; validation before the database; ADMIN creates, audited,
 redirected; ENGINEER cannot edit or deactivate; link authorisation and rules
 through the action layer; deactivate / reactivate audited. 198 tests in 20
 files pass; the database and counters are unchanged after two consecutive runs.
+
+---
+
+## 16. Bookings (Phase 7)
+
+### 16.1 Shape
+
+Bookings live at `/bookings` (workspace), `/bookings/new`, `/bookings/[id]`
+(Overview, Equipment, Activity tabs) and `/bookings/[id]/edit`, on the
+top-navigation shell. Phase 7 owns the reservation - everything before the kit
+physically leaves; the handover inspection and signatures are Phase 8 and
+`/bookings/[id]/handover` does not exist yet.
+
+Layers: `server/dal/bookings.dal.ts` (the Phase 2 module, extended - every
+read still passes through `visibilityFor(actor)`), `lib/booking-rules.ts`
+(pure lifecycle and time rules shared by DAL, service, dashboard and tests),
+`server/services/bookings.service.ts` (reservation gate, explicit transitions,
+edit and cancellation, each in one transaction with its audit entry),
+`server/actions/bookings.actions.ts` (built with `action()`),
+`features/bookings/` (UI). Pickers are GET searches whose selection lands in
+the URL; the schedule and review section is the only POST.
+
+### 16.2 Booking number
+
+`nextNumber(tx, NumberScope.BOOKING)` inside the insert's transaction gives
+`BK-YYYY-NNNNNN` (yearly, AD-1). A failed reservation - conflict, refused
+readiness, schedule error - rolls the increment back with it, so numbers stay
+gap-free, and tests never leave a `BOOKING` counter row behind.
+
+### 16.3 Draft and reservation
+
+A booking is created either as a **DRAFT** or directly **RESERVED**. A draft
+holds nothing: it is not in the exclusion constraint's status set and blocks
+no one. Reserving - on creation or later through `reserveBooking` - runs the
+gate: the editor is bookable (16.5), the kit is structurally ready (16.6), and
+the window is free of other holding bookings (16.4). Drafts exist so a planner
+can pencil a job in before the kit's readiness or the exact window is settled.
+
+### 16.4 Overlap: pre-check and the constraint
+
+`findOverlappingBookings` mirrors the database predicate exactly - live
+statuses (RESERVED, READY_FOR_HANDOVER, CHECKED_OUT, OVERDUE,
+RETURN_INSPECTION) and a **half-open** window `[bookingStart, bookingEnd)`,
+the same `tstzrange(…, '[)')` the constraint uses (`bookingStart < end AND
+bookingEnd > start`). Booking A 10:00–12:00 and booking B 12:00–14:00 on one
+kit are adjacent and both allowed; a single shared minute is a conflict. The
+Phase 1 constraint was closed on both ends and refused this exact case;
+migration `20260905230000_booking_half_open_window` re-created it half-open
+and made the period check strict. The pre-check exists to explain the conflict
+("already booked under BK-… for …"); `bookings_no_overlapping_period_per_kit`
+is the authority when two operators race for the same kit and window, and
+`translateBookingDbError` turns its refusal into a `conflict` domain error the
+form renders. The two schedule check constraints are translated the same way.
+
+### 16.5 Editor selection
+
+The Phase 6 picker search (`searchActiveEditors`: active, live editors by
+name, staff ID or contact number, exact staff ID first) plus
+`editorBookingBlocker`: external editors may have no staff ID (Phase 7
+decision); internal editors must have one before they can be booked, because
+the handover document and the account link key on it. Inactive and removed
+editors are refused at creation, reservation, readiness and edit. No company
+field is required of external editors (Phase 7 decision).
+
+### 16.6 Kit readiness
+
+`evaluateKitReadinessForBooking` (kits.service) is the Phase 5 availability
+rule with the *current* hold set aside: the kit's own RESERVED / CHECKED_OUT
+status and its live booking describe today, and the requested window is
+checked by 16.4 instead. Everything else still blocks - retired, maintenance
+or damaged kit, removed kit, required members unavailable, in maintenance or
+removed - and optional members warn. The kit picker, the reservation gate,
+readiness re-checks on `markReadyForHandover` and the booking's Equipment tab
+all call this one function. `evaluateKitAvailability` itself learned to ignore
+a reservation that has not started yet, so a booking next month no longer
+shows the kit as "Reserved" today.
+
+### 16.7 Lifecycle
+
+`lib/booking-rules.ts` holds the transition table and the service exposes one
+operation per edge:
+
+| From | To | Operation | What it checks / does |
+|---|---|---|---|
+| DRAFT | RESERVED | `reserveBooking` | editor, readiness, window |
+| RESERVED | DRAFT | `returnToDraft` | releases the window |
+| RESERVED | READY_FOR_HANDOVER | `markReadyForHandover` | editor, readiness, window; sets `Kit.status` RESERVED (the kit is set aside) |
+| READY_FOR_HANDOVER | RESERVED | `revertReadyForHandover` | kit back to AVAILABLE |
+| DRAFT / RESERVED / READY_FOR_HANDOVER | CANCELLED | `cancelBooking` | reason required; kit released |
+
+CHECKED_OUT and beyond belong to Phases 8 and 9; COMPLETED and CANCELLED are
+terminal. No form posts a status. Edit scope follows the status: DRAFT and
+RESERVED are fully editable (a reservation whose kit or window changes is
+re-validated, excluding itself from the overlap check); READY_FOR_HANDOVER
+allows engineer, purpose and notes only; later states are read-only.
+
+### 16.8 Overdue and due soon
+
+Derived, never scheduled (Phase 7 decision): `isBookingOverdue` = status
+OVERDUE, or CHECKED_OUT with `expectedReturnDate < now`; the dashboard's
+`overdueWhere` is the SQL form of the same rule, so both surfaces agree. `now`
+is an instant; Asia/Dubai only decides how it is displayed. "Due soon" is
+`[now, now + BOOKING_DUE_SOON_HOURS)` for kits that are out - one setting
+(`env.BOOKING_DUE_SOON_HOURS`, default 48) read by the list filter, the tab
+count and the dashboard. The service computes both flags per row
+(`bookingTimeState`); components render them and never recompute.
+
+### 16.9 Engineer
+
+`Booking.engineerId` already pointed at `EngineerProfile` (required), so the
+form assigns an engineer from the active profiles whose account is live and not
+disabled, defaulting to the signed-in engineer. Reassignment is an ordinary
+edit audited as `BOOKING_UPDATED` with "engineer assigned: …" in the summary.
+No new relation was needed.
+
+### 16.10 Cancellation
+
+`cancelBooking` requires `booking.cancel`, an eligible status and a reason;
+it sets CANCELLED, `cancelledAt` and `cancelReason`, restores the kit status
+if the booking had set it aside, and writes `BOOKING_CANCELLED` with the
+reason. Rows are never deleted; the exclusion constraint ignores CANCELLED, so
+the window is free the moment the transaction commits.
+
+### 16.11 Detail and timeline
+
+`getBookingDetailForActor` returns the booking with the editor (name, type,
+staff ID, contact, company or department), the kit (code, name, status,
+barcode), the engineer's name and staff ID and the checklist template name -
+no user ids, emails or credentials. The Overview shows the schedule strip,
+the three identity panels, the operational status with the derived time state,
+the readiness verdict and the explicit actions; the Equipment tab shows the
+kit's composition read-only; the Activity tab renders the booking's audit
+entries as sentences. Links to the editor, kit and assets appear only when the
+actor holds the matching read permission.
+
+### 16.12 Permissions
+
+`booking.create`, `booking.update`, `booking.cancel`: ADMIN and ENGINEER.
+`booking.read`: ADMIN, ENGINEER, VIEWER. `booking.readOwn`: EDITOR, resolved
+through `User → EditorProfile.userId → Booking.editorId` in the DAL scope; an
+editor's search never leaves that scope and another editor's booking is a 404.
+Client-supplied editor ids are inputs to be validated, never proof of ownership.
+
+### 16.13 Audit
+
+`BOOKING_CREATED` (with the initial status), `BOOKING_STATUS_CHANGED` for
+every transition (with a detail such as "Kit set aside for handover"),
+`BOOKING_UPDATED` with the changed fields before and after,
+`BOOKING_CANCELLED` with the reason, and `KIT_STATUS_CHANGED` on the kit when
+it is set aside or released. All values existed; no migration was needed.
+
+### 16.14 Tests
+
+`tests/integration/bookings.service.test.ts` (16, rolled back): Dubai
+wall-clock conversion; overdue / due-soon derivation; half-open overlap;
+schedule errors field by field; BK numbering in sequence and drafts holding
+nothing; reservation for an external editor without staff ID, audited, kit
+status untouched; internal-without-staff-ID, inactive, removed, unknown editor
+and unknown engineer refused; damaged, maintenance-blocked and retired kits
+refused (draft allowed, reserve refused); impossible schedules refused without
+consuming a number; overlapping reservations refused, back-to-back and
+post-cancellation ones accepted, drafts never block; the exclusion
+constraint settling a race and its translation; search by number, editor
+name, staff ID, kit code and kit barcode, status filters, sort, pagination and
+tab counts; due-soon and overdue filters and flags; EDITOR scope and no
+sensitive fields; edit re-validation of window and kit, restricted edits when
+ready, read-only when completed; the full transition walk with kit set aside
+and released, cancellation preserving the row, terminal states, and the
+ordered timeline. `tests/integration/bookings.actions.test.ts` (9, one
+rolled-back transaction): anonymous rejected; VIEWER reads but cannot create;
+EDITOR cannot create; validation before the database; ENGINEER creates a
+draft; ADMIN reserves and an overlapping reservation is refused with a
+sentence; ENGINEER edits notes; EDITOR sees only their own booking through
+the loaders; cancellation authorisation, reason required, terminal states.
+`tests/integration/bookings.boundary.test.ts` (2, rolled back) is the exact
+adjacent-booking proof: A 10:00–12:00 and B 12:00–14:00 on one kit both
+reserve, a direct insert of 08:00–10:00 passes the constraint itself, and
+11:00–13:00 is refused by the service and, bypassing it, by the database.
+The Phase 2 scope suite still passes unchanged. 237 tests in 25 files pass;
+the database and every numbering counter are unchanged after two runs.

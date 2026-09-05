@@ -49,6 +49,8 @@ const envSchema = z.object({
   APP_NAME: z.string().min(1).default('Edit Kit Management System'),
   APP_ORG_NAME: z.string().min(1).default('Engineering & Editing Department'),
   APP_TIMEZONE: z.string().min(1).default('Asia/Dubai'),
+  /** Window for the bookings "Due soon" filter and dashboard upcoming returns. */
+  BOOKING_DUE_SOON_HOURS: z.coerce.number().int().positive().default(48),
 
   // --- Storage ---------------------------------------------------------------
   STORAGE_PROVIDER: z.enum(['LOCAL', 'AZURE_BLOB']).default('LOCAL'),

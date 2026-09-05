@@ -931,3 +931,92 @@ export async function getKitHistory(db: Db, id: string, options: { includeIssues
   events.sort((a, b) => b.at.getTime() - a.at.getTime() || a.id.localeCompare(b.id))
   return events.slice(0, limit)
 }
+
+// -----------------------------------------------------------------------------
+// Kit picker for bookings (Phase 7)
+// -----------------------------------------------------------------------------
+
+export interface KitUpcomingBooking {
+  id: string
+  bookingNumber: string
+  status: BookingStatus
+  bookingStart: Date
+  bookingEnd: Date
+  editorName: string
+}
+
+export interface KitCandidate {
+  id: string
+  kitCode: string
+  name: string
+  admBarcode: string | null
+  status: KitStatus
+  facts: KitAvailabilityFacts
+  /** Live bookings that end today or later, soonest first - what the scheduler needs to see. */
+  upcoming: KitUpcomingBooking[]
+}
+
+/**
+ * Live, non-retired kits matching the term on code, name or barcode, with the
+ * facts the readiness rule needs and their upcoming live bookings. An exact
+ * code or barcode match is placed first.
+ */
+export async function searchKitCandidates(db: Db, term: string, now: Date, limit = 10): Promise<KitCandidate[]> {
+  const search = term.trim().slice(0, 100)
+  if (!search) return []
+  const contains = { contains: search, mode: 'insensitive' as const }
+
+  const records = await db.kit.findMany({
+    where: {
+      deletedAt: null,
+      status: { not: KitStatus.RETIRED },
+      OR: [{ kitCode: contains }, { name: contains }, { admBarcode: contains }],
+    },
+    orderBy: [{ kitCode: 'asc' }],
+    take: limit,
+    select: {
+      id: true,
+      kitCode: true,
+      name: true,
+      admBarcode: true,
+      status: true,
+      isActive: true,
+      deletedAt: true,
+      kitAssets: { ...activeMembers, select: memberFactsSelect },
+      bookings: {
+        where: { deletedAt: null, status: { in: [...LIVE_BOOKING_STATUSES] }, bookingEnd: { gte: now } },
+        orderBy: [{ bookingStart: 'asc' }],
+        take: 5,
+        select: { id: true, bookingNumber: true, status: true, bookingStart: true, bookingEnd: true, editor: { select: { fullName: true } } },
+      },
+    },
+  })
+
+  const upper = search.toUpperCase()
+  const rows: KitCandidate[] = records.map((record) => ({
+    id: record.id,
+    kitCode: record.kitCode,
+    name: record.name,
+    admBarcode: record.admBarcode,
+    status: record.status,
+    facts: {
+      kitId: record.id,
+      kitCode: record.kitCode,
+      status: record.status,
+      deleted: record.deletedAt !== null,
+      isActive: record.isActive,
+      members: record.kitAssets.map(toMemberFacts),
+      liveBooking: null,
+    },
+    upcoming: record.bookings.map((booking) => ({
+      id: booking.id,
+      bookingNumber: booking.bookingNumber,
+      status: booking.status,
+      bookingStart: booking.bookingStart,
+      bookingEnd: booking.bookingEnd,
+      editorName: booking.editor.fullName,
+    })),
+  }))
+  const exact = (row: KitCandidate) => row.kitCode.toUpperCase() === upper || row.admBarcode?.toUpperCase() === upper
+  return rows.sort((a, b) => Number(exact(b)) - Number(exact(a)) || a.kitCode.localeCompare(b.kitCode))
+}

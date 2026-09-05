@@ -99,7 +99,10 @@ END $$;
 
 
 -- -----------------------------------------------------------------------------
--- Test 1c: a non-overlapping RESERVED booking is allowed
+-- Test 1c: an adjacent RESERVED booking is allowed - it starts at the very
+-- instant the previous one (t1-a, ending 2030-10-10T17:00:00Z) ends. The
+-- window is half-open, [start, end), so the boundary instant belongs to the
+-- later booking only (Phase 7, migration 20260905230000).
 -- -----------------------------------------------------------------------------
 DO $$
 DECLARE f fx%ROWTYPE;
@@ -109,13 +112,37 @@ BEGIN
     INSERT INTO bookings (id, "bookingNumber", "kitId", "editorId", "engineerId", status,
                           "bookingStart", "bookingEnd", "expectedReturnDate", "createdById", "updatedAt")
     VALUES ('t1-d', 'BK-TEST-000004', f.kit_id, f.editor_id, f.engineer_id, 'RESERVED',
-            '2030-10-11T08:00:00Z', '2030-10-20T17:00:00Z', '2030-10-20T17:00:00Z', f.admin_id, now());
+            '2030-10-10T17:00:00Z', '2030-10-20T17:00:00Z', '2030-10-20T17:00:00Z', f.admin_id, now());
 
     INSERT INTO results (test, status, detail)
-    VALUES ('1c. Adjacent non-overlapping booking allowed', 'PASS', 'starts the day after the previous one ends');
+    VALUES ('1c. Adjacent booking allowed', 'PASS', 'starts the instant the previous one ends - half-open window');
   EXCEPTION WHEN OTHERS THEN
     INSERT INTO results (test, status, detail)
-    VALUES ('1c. Adjacent non-overlapping booking allowed', 'FAIL', SQLERRM);
+    VALUES ('1c. Adjacent booking allowed', 'FAIL', SQLERRM);
+  END;
+END $$;
+
+
+-- -----------------------------------------------------------------------------
+-- Test 1d: a zero-length booking (start = end) is rejected. With a half-open
+-- range it would be empty and collide with nothing, so the period must be
+-- strictly ordered.
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE f fx%ROWTYPE;
+BEGIN
+  SELECT * INTO f FROM fx;
+  BEGIN
+    INSERT INTO bookings (id, "bookingNumber", "kitId", "editorId", "engineerId", status,
+                          "bookingStart", "bookingEnd", "expectedReturnDate", "createdById", "updatedAt")
+    VALUES ('t1-e', 'BK-TEST-000105', f.kit_id, f.editor_id, f.engineer_id, 'RESERVED',
+            '2030-11-01T08:00:00Z', '2030-11-01T08:00:00Z', '2030-11-01T08:00:00Z', f.admin_id, now());
+
+    INSERT INTO results (test, status, detail)
+    VALUES ('1d. Zero-length booking rejected', 'FAIL', 'bookingEnd = bookingStart was accepted');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO results (test, status, detail)
+    VALUES ('1d. Zero-length booking rejected', 'PASS', SQLERRM);
   END;
 END $$;
 
