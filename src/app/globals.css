@@ -141,3 +141,132 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* Sign-out door scene (account menu). ~900 ms, all CSS on an inline SVG.
+   Percentages of ek-door-swing: 0-30 % closed while the figure approaches,
+   30-48 % opens, holds open while the figure steps through, 74-100 % closes.
+   The real sign-out fires when this animation ends. */
+.ek-door-leaf,
+.ek-figure,
+.ek-leg,
+.ek-arm {
+  transform-box: fill-box;
+}
+
+.ek-door-leaf {
+  transform-origin: left center;
+}
+
+.ek-door-knob {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+[data-state='leaving'] .ek-door-leaf {
+  animation: ek-door-swing 900ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+[data-state='leaving'] .ek-door-knob {
+  animation: ek-knob-fade 900ms linear forwards;
+}
+
+[data-state='leaving'] .ek-doorway {
+  animation: ek-doorway-glow 900ms ease-in-out forwards;
+}
+
+.ek-figure {
+  transform-origin: center bottom;
+  animation: ek-run 900ms cubic-bezier(0.3, 0, 0.6, 1) forwards;
+}
+
+.ek-leg {
+  transform-origin: top center;
+}
+
+.ek-leg-left {
+  animation: ek-stride 130ms ease-in-out infinite alternate;
+}
+
+.ek-leg-right {
+  animation: ek-stride 130ms ease-in-out infinite alternate-reverse;
+}
+
+.ek-arm {
+  transform-origin: top left;
+  animation: ek-stride 130ms ease-in-out infinite alternate-reverse;
+}
+
+@keyframes ek-run {
+  0% {
+    opacity: 0;
+    transform: translateX(-4px) scale(0.85);
+  }
+  12% {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+  62% {
+    opacity: 1;
+    transform: translateX(24px) scale(1);
+  }
+  74% {
+    opacity: 1;
+    transform: translateX(31px) scale(0.92);
+  }
+  82%,
+  100% {
+    opacity: 0;
+    transform: translateX(34px) scale(0.85);
+  }
+}
+
+@keyframes ek-stride {
+  from {
+    transform: rotate(-28deg);
+  }
+  to {
+    transform: rotate(28deg);
+  }
+}
+
+@keyframes ek-door-swing {
+  0%,
+  30% {
+    transform: scaleX(1);
+  }
+  48%,
+  74% {
+    transform: scaleX(0.12);
+  }
+  100% {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes ek-knob-fade {
+  0%,
+  30% {
+    opacity: 1;
+  }
+  40%,
+  80% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes ek-doorway-glow {
+  0%,
+  30% {
+    opacity: 0;
+  }
+  48%,
+  74% {
+    opacity: 0.35;
+  }
+  100% {
+    opacity: 0;
+  }
+}

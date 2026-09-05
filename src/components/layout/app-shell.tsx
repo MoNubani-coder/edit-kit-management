@@ -12,7 +12,7 @@ import type { NavLink, NavSection } from '@/lib/constants/navigation'
 import { ROLE_LABELS } from '@/lib/constants/roles'
 import { cn } from '@/lib/utils/cn'
 
-import { SignOutButton } from './sign-out-button'
+import { SignOutMenuItem } from './sign-out-menu-item'
 
 /**
  * Application shell: a single navy command bar across the full width.
@@ -150,9 +150,12 @@ function AdminDropdown({ items, pathname }: { items: readonly NavLink[]; pathnam
 
 function AccountMenu({ user }: { user: ShellUser }) {
   const [open, setOpen] = useState(false)
+  // While the sign-out scene plays the menu must stay put: dismissing it would
+  // unmount the item before the action runs.
+  const [signingOut, setSigningOut] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const close = useCallback(() => setOpen(false), [])
-  useDismiss(open, close, ref)
+  useDismiss(open && !signingOut, close, ref)
 
   return (
     <div ref={ref} className="relative">
@@ -161,7 +164,9 @@ function AccountMenu({ user }: { user: ShellUser }) {
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`Account: ${user.name}`}
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => {
+          if (!signingOut) setOpen((value) => !value)
+        }}
         className="flex items-center gap-2 rounded-full pl-1 pr-2 py-1 text-nav-muted transition-colors hover:bg-nav-active hover:text-nav-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-nav"
       >
         <span
@@ -188,7 +193,7 @@ function AccountMenu({ user }: { user: ShellUser }) {
             </div>
           </div>
           <div className="p-1.5" role="none">
-            <SignOutButton className="h-9 rounded-lg" />
+            <SignOutMenuItem onBusyChange={setSigningOut} />
           </div>
         </div>
       ) : null}
