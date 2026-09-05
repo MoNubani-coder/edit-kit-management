@@ -27,12 +27,21 @@ const ICONS: Record<KpiIcon, LucideIcon> = {
  * cells are separated by hairlines (the 1px grid gap shows the frame colour
  * through). Reads as an instrument panel rather than a row of loose boxes.
  */
-export function StatStrip({ children, className }: { children: ReactNode; className?: string }) {
+export function StatStrip({
+  children,
+  columns = 6,
+  className,
+}: {
+  children: ReactNode
+  /** Figures per row on wide screens: 3 gives the two-row operations board. */
+  columns?: 3 | 6
+  className?: string
+}) {
   return (
     <div
       className={cn(
         'grid gap-px overflow-hidden rounded-panel border border-line bg-line',
-        'grid-cols-2 sm:grid-cols-3 2xl:grid-cols-6',
+        columns === 3 ? 'grid-cols-2 sm:grid-cols-3' : 'grid-cols-2 sm:grid-cols-3 2xl:grid-cols-6',
         className,
       )}
     >
@@ -61,7 +70,7 @@ export function Stat({
   const Icon = ICONS[icon]
 
   return (
-    <div className="theme-transition relative flex min-h-[7.5rem] flex-col justify-between bg-panel p-5">
+    <div className="theme-transition relative flex min-h-[8.5rem] flex-col justify-between bg-panel p-6">
       <div className="flex items-start justify-between gap-3">
         <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-subtle">{title}</p>
         <span
@@ -78,7 +87,7 @@ export function Stat({
       <div>
         <p
           className={cn(
-            'font-display text-[34px] font-semibold leading-none tabular-nums tracking-tight',
+            'font-display text-[38px] font-semibold leading-none tabular-nums tracking-tight',
             attention ? 'text-amber-700 dark:text-amber-300' : 'text-foreground',
           )}
         >

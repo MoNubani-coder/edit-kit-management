@@ -127,7 +127,7 @@ const QUICK_ACTIONS: ReadonlyArray<QuickAction & { permission: Permission }> = [
 ]
 
 export function quickActionsFor(actor: Actor): QuickAction[] {
-  // Shortcuts are for people who *do* things; a read-only viewer has the sidebar.
+  // Shortcuts are for people who *do* things; a read-only viewer has the navigation bar.
   if (!canAny(actor, ['booking.create', 'issue.create'])) return []
 
   return QUICK_ACTIONS.filter((action) => can(actor, action.permission)).map(

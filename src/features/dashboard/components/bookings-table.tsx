@@ -11,13 +11,14 @@ import type { DashboardBookingRow } from '@/server/dal/dashboard.dal'
  * the variant; everything else is shared so the tables read alike.
  */
 
-export type BookingsTableVariant = 'today' | 'upcoming' | 'overdue' | 'history'
+export type BookingsTableVariant = 'today' | 'upcoming' | 'overdue' | 'history' | 'list'
 
 const EMPTY: Record<BookingsTableVariant, { title: string; description: string }> = {
   today: { title: 'No collections or returns today', description: 'Bookings starting or due back today will appear here.' },
   upcoming: { title: 'Nothing due back', description: 'Kits currently out will be listed here with their return dates.' },
   overdue: { title: 'Nothing overdue', description: 'Every checked-out kit is within its expected return.' },
   history: { title: 'No bookings yet', description: 'Your bookings will appear here once one is made in your name.' },
+  list: { title: 'No bookings match', description: 'Try another filter or search term, or clear them to see everything you have access to.' },
 }
 
 const TH = 'px-5 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-subtle'
@@ -83,6 +84,12 @@ export function BookingsTable({
                 <th scope="col" className={TH}>Return</th>
               </>
             ) : null}
+            {variant === 'list' ? (
+              <>
+                <th scope="col" className={TH}>Start</th>
+                <th scope="col" className={TH}>Expected return</th>
+              </>
+            ) : null}
             <th scope="col" className={TH}>Status</th>
           </tr>
         </thead>
@@ -138,6 +145,17 @@ export function BookingsTable({
                     </td>
                     <td className={TD}>
                       <DateCell date={row.actualReturnDate ?? row.expectedReturnDate} timeZone={timeZone} />
+                    </td>
+                  </>
+                ) : null}
+
+                {variant === 'list' ? (
+                  <>
+                    <td className={TD}>
+                      <DateCell date={row.collectionDate ?? row.bookingStart} timeZone={timeZone} />
+                    </td>
+                    <td className={TD}>
+                      <DateCell date={row.expectedReturnDate} timeZone={timeZone} />
                     </td>
                   </>
                 ) : null}

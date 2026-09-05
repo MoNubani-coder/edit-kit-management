@@ -2,7 +2,7 @@ import { canAny, type Permission, type PermissionSubject } from '@/server/auth/p
 
 /**
  * Navigation definition. Data, not JSX, so the server layout can filter it by
- * permission and hand a plain serialisable list to the client sidebar. Icons
+ * permission and hand a plain serialisable list to the client command bar. Icons
  * are referenced by name for the same reason - a React component cannot cross
  * the server/client boundary as a prop.
  *

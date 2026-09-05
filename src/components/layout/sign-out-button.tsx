@@ -3,7 +3,8 @@
 import { LoaderCircle, LogOut } from 'lucide-react'
 import { useFormStatus } from 'react-dom'
 
-import { Button } from '@/components/ui/button'
+import { Button, type ButtonProps } from '@/components/ui/button'
+import { cn } from '@/lib/utils/cn'
 import { signOutAction } from '@/server/actions/auth.actions'
 
 /**
@@ -12,17 +13,26 @@ import { signOutAction } from '@/server/actions/auth.actions'
  * of every action request, so this also carries CSRF protection for free.
  */
 
-function SubmitButton({ compact }: { compact: boolean }) {
+function SubmitButton({
+  compact,
+  variant,
+  className,
+}: {
+  compact: boolean
+  variant: ButtonProps['variant']
+  className?: string
+}) {
   const { pending } = useFormStatus()
 
   return (
     <Button
       type="submit"
-      variant="ghost"
+      variant={variant}
       size={compact ? 'icon' : 'sm'}
       disabled={pending}
       aria-label="Sign out"
       title="Sign out"
+      className={cn(!compact && 'w-full justify-start', className)}
     >
       {pending ? (
         <LoaderCircle aria-hidden className="h-4 w-4 animate-spin" />
@@ -34,10 +44,18 @@ function SubmitButton({ compact }: { compact: boolean }) {
   )
 }
 
-export function SignOutButton({ compact = false }: { compact?: boolean }) {
+export function SignOutButton({
+  compact = false,
+  variant = 'ghost',
+  className,
+}: {
+  compact?: boolean
+  variant?: ButtonProps['variant']
+  className?: string
+}) {
   return (
     <form action={signOutAction}>
-      <SubmitButton compact={compact} />
+      <SubmitButton compact={compact} variant={variant} className={className} />
     </form>
   )
 }

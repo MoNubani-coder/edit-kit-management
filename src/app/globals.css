@@ -8,7 +8,7 @@
  * @theme block, so components never hard-code a palette and the pull-cord
  * theme switch changes the whole interface by toggling one class on <html>.
  *
- * Identity: deep navy sidebar (constant in both modes), calm cool-grey
+ * Identity: deep navy navigation bar (constant in both modes), calm cool-grey
  * surfaces, navy ink, and a single teal accent for the active state, links,
  * counts and the EK mark. Manrope carries headings and headline numbers; Inter
  * carries everything dense.
@@ -38,11 +38,11 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-ring: var(--ring);
 
-  --color-sidebar: var(--sidebar);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar-muted: var(--sidebar-muted);
-  --color-sidebar-line: var(--sidebar-line);
-  --color-sidebar-active: var(--sidebar-active);
+  --color-nav: var(--nav);
+  --color-nav-foreground: var(--nav-foreground);
+  --color-nav-muted: var(--nav-muted);
+  --color-nav-line: var(--nav-line);
+  --color-nav-active: var(--nav-active);
 
   --radius-panel: 14px;
 }
@@ -67,11 +67,11 @@
   --accent-foreground: #0b5f5c;
   --ring: #0e8a86;
 
-  --sidebar: #0f1b33;
-  --sidebar-foreground: #f1f4f9;
-  --sidebar-muted: #93a0b8;
-  --sidebar-line: rgba(255, 255, 255, 0.08);
-  --sidebar-active: rgba(255, 255, 255, 0.06);
+  --nav: #0f1b33;
+  --nav-foreground: #f1f4f9;
+  --nav-muted: #93a0b8;
+  --nav-line: rgba(255, 255, 255, 0.08);
+  --nav-active: rgba(255, 255, 255, 0.06);
 }
 
 .dark {
@@ -94,11 +94,11 @@
   --accent-foreground: #7fe0dc;
   --ring: #2fb8b3;
 
-  --sidebar: #0a1020;
-  --sidebar-foreground: #f1f4f9;
-  --sidebar-muted: #8b98b1;
-  --sidebar-line: rgba(255, 255, 255, 0.08);
-  --sidebar-active: rgba(255, 255, 255, 0.07);
+  --nav: #0a1020;
+  --nav-foreground: #f1f4f9;
+  --nav-muted: #8b98b1;
+  --nav-line: rgba(255, 255, 255, 0.08);
+  --nav-active: rgba(255, 255, 255, 0.07);
 }
 
 /* Surfaces that should cross-fade when the theme changes. */

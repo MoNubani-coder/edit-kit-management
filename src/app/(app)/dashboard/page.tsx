@@ -25,7 +25,7 @@ export default async function DashboardPage() {
 
   return (
     <>
-      <PageHeader eyebrow={isEditorView ? 'My equipment' : 'Operations'} title="Dashboard" description={description} />
+      <PageHeader eyebrow={isEditorView ? 'My equipment / Dashboard' : 'Operations / Dashboard'} title="Dashboard" description={description} />
       <DashboardView data={data} />
     </>
   )

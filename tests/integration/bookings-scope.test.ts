@@ -91,6 +91,36 @@ describe('booking visibility', () => {
     }
   })
 
+  it('search and quick filters are additional terms inside the actor scope, never a way out of it', async () => {
+    const [rowA, rowB] = await Promise.all([
+      testDb.booking.findUniqueOrThrow({ where: { id: bookingA }, select: { bookingNumber: true } }),
+      testDb.booking.findUniqueOrThrow({ where: { id: bookingB }, select: { bookingNumber: true } }),
+    ])
+
+    // Editor A searching for editor B's booking number finds nothing.
+    expect(await listBookingsForActor(testDb, actorFor(editorA), { search: rowB.bookingNumber })).toEqual([])
+    // ... but finds their own, case-insensitively.
+    const own = await listBookingsForActor(testDb, actorFor(editorA), { search: rowA.bookingNumber.toLowerCase() })
+    expect(own.map((booking) => booking.id)).toEqual([bookingA])
+
+    // An engineer sees both by kit code.
+    const byKit = await listBookingsForActor(testDb, actorFor(engineer), { search: 'MBP-02' })
+    expect(byKit.map((booking) => booking.id)).toEqual(expect.arrayContaining([bookingA, bookingB]))
+
+    // Quick filters: both fixtures are DRAFT, so status filters exclude them.
+    expect(await listBookingsForActor(testDb, actorFor(engineer), { filter: 'reserved' })).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: bookingA })]),
+    )
+    expect(await listBookingsForActor(testDb, actorFor(engineer), { filter: 'overdue' })).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: bookingA })]),
+    )
+    // "Today" for a far-future now excludes them too; "all" keeps them.
+    const farFuture = new Date('2090-01-01T00:00:00.000Z')
+    expect(await listBookingsForActor(testDb, actorFor(engineer), { filter: 'today', now: farFuture })).toEqual([])
+    const all = await listBookingsForActor(testDb, actorFor(engineer), { filter: 'all' })
+    expect(all.map((booking) => booking.id)).toEqual(expect.arrayContaining([bookingA, bookingB]))
+  })
+
   it('an actor with neither booking permission is refused with ForbiddenError (fail closed)', () => {
     // Every real role holds booking.read or booking.readOwn, so simulate a
     // role the matrix does not know. It must grant nothing, not crash.

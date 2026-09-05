@@ -1162,31 +1162,40 @@ refs so fast pointer sequences cannot outrun a render. `aria-label` reads
 the control only, never on the page. With `prefers-reduced-motion` the cord
 still follows the finger (direct manipulation) but the spring-back and the
 bulb nudge are disabled; the theme itself always switches. The control sits in
-the rail's bottom panel beside the user, and a 75 % version sits in the
-corner of the sign-in brand panel (and the mobile brand band).
+the command bar beside the account menu, and the same compact version sits in
+the corner of the sign-in brand panel (and the mobile brand band).
 
 ### 12.8 Design language
 
 The interface is meant to read as its own product, not a generic admin
 template:
 
-- **Identity:** deep navy rail in both modes; a single teal accent (`--accent`)
+- **Identity:** deep navy command bar in both modes; a single teal accent (`--accent`)
   for the active marker, links, counts, the EK mark and focus rings; Manrope for
   headings, brand and headline numbers, Inter for dense content.
 - **Surfaces:** cool off-white page (`#f3f5f9`) with white panels in light mode;
   deep navy-black page (`#0b1120`) with slate-blue panels in dark mode. Panels
   use a 14 px radius, a hairline border and a tinted header - no drop shadows.
-- **Rail:** 17.5 rem wide, brand block with the teal EK mark and the tagline,
-  grouped navigation with uppercase eyebrows ("Operations", "Administration"),
-  a teal left marker on the active item, and a bottom panel holding the user
-  (initials, name, role, sign-out) and the pull-cord.
-- **Top bar:** where you are (group eyebrow + section title), today's date,
-  the role chip and the user's initials - the page carries its own title block
-  with an eyebrow, a display-face heading and a one-line context.
-- **Dashboard rhythm:** one hairline-divided instrument strip for the six
-  headline numbers, a row of "Go to" shortcut chips, then framed panels -
-  overdue first when it exists, the day's collections and returns side by
-  side, issues beside an activity timeline with teal marker on the newest.
+- **Command bar (no sidebar):** one 60 px navy header across the full width -
+  the teal EK mark with the application name and tagline, horizontal primary
+  navigation (Dashboard, Bookings, Kits, Equipment, Editors, Issues, Reports)
+  with a teal underline on the active section, an *Administration* dropdown
+  that appears only when the server included that group, then today's date,
+  the role chip, the compact pull-cord and an account menu (name, email, role,
+  sign-out). Below `lg` the tabs fold into a panel behind a menu button.
+- **Workspace header:** a breadcrumb eyebrow ("Operations / Bookings", last
+  segment in teal), a 30 px display heading with actions on the right, one line
+  of context, and - where a workspace has sections - a horizontal tab bar on
+  the closing hairline (Kits and Equipment by status, Administration by
+  section). Nothing else sits between the command bar and the page.
+- **Dashboard rhythm:** an "Operations status" board - a framed panel with two
+  rows of three connected figures - then a row of "Go to" shortcut chips,
+  overdue first when it exists, and two paired panels across the full width:
+  today's movements beside upcoming returns, open issues beside an activity
+  timeline with a teal marker on the newest.
+- **Bookings workspace:** search field and quick-filter chips (All, Today,
+  Reserved, Checked out, Due soon, Overdue) above a wide list with a slim count
+  line - no table nested in a card.
 - **Status:** square-cornered chips with a leading dot; red only for overdue
   and critical.
 - **Empty states:** dashed frame, teal-tinted icon, one plain sentence.

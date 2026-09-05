@@ -187,7 +187,10 @@ async function seedFixtures(tx: Db): Promise<Fixtures> {
   // Tomorrow (5 Sep Dubai): 20:30 UTC on 4 Sep - editor A
   await booking('tomorrow', 'X1', a, BookingStatus.RESERVED, at('2026-09-04T20:30:00.000Z'), at('2026-09-08T13:00:00.000Z'))
 
-  // --- audit rows: 12 operational + 2 authentication, stamped in the past
+  // --- audit rows: 12 operational + 2 authentication. Stamped just ahead of the
+  // real clock (not the fixed NOW) so they always outrank whatever genuine audit
+  // rows the development database has accumulated; the transaction rolls back.
+  const auditBase = Date.now() + 60_000
   for (let index = 0; index < 12; index += 1) {
     await tx.auditLog.create({
       data: {
@@ -196,7 +199,7 @@ async function seedFixtures(tx: Db): Promise<Fixtures> {
         entityId: `fixture-${index}`,
         actorName: 'Fixture Engineer',
         summary: `Fixture activity ${index}`,
-        createdAt: new Date(NOW.getTime() - (index + 1) * 60_000),
+        createdAt: new Date(auditBase - (index + 1) * 60_000),
         // A payload that must never reach the dashboard.
         newValue: { secret: 'payload' },
         ipAddress: '10.0.0.99',
@@ -210,7 +213,7 @@ async function seedFixtures(tx: Db): Promise<Fixtures> {
       entityType: 'User',
       actorName: 'Fixture Admin',
       summary: 'fixture-admin signed in',
-      createdAt: new Date(NOW.getTime() - 30_000),
+      createdAt: new Date(auditBase - 30_000),
     },
   })
   await tx.auditLog.create({
@@ -219,7 +222,7 @@ async function seedFixtures(tx: Db): Promise<Fixtures> {
       entityType: 'User',
       actorName: 'nobody@example.test',
       summary: 'Sign-in failed: unknown account',
-      createdAt: new Date(NOW.getTime() - 20_000),
+      createdAt: new Date(auditBase - 20_000),
     },
   })
 

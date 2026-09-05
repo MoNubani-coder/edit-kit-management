@@ -13,8 +13,8 @@ import { env } from '@/lib/env'
 export default function AuthLayout({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-screen flex-col bg-background lg:grid lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
-      <aside className="relative hidden bg-sidebar text-sidebar-foreground lg:flex lg:flex-col lg:justify-between lg:px-14 lg:py-12">
-        <div className="absolute right-8 top-8 text-sidebar-muted hover:text-sidebar-foreground">
+      <aside className="relative hidden bg-nav text-nav-foreground lg:flex lg:flex-col lg:justify-between lg:px-14 lg:py-12">
+        <div className="absolute right-8 top-8 text-nav-muted hover:text-nav-foreground">
           <PullCordThemeToggle variant="compact" />
         </div>
 
@@ -27,10 +27,10 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
           <h1 className="mt-3 font-display text-4xl font-semibold leading-tight tracking-tight text-white">
             {env.APP_NAME}
           </h1>
-          <p className="mt-3 text-lg text-sidebar-muted">{APP_TAGLINE}</p>
-          <ul className="mt-10 space-y-3 border-t border-sidebar-line pt-8">
+          <p className="mt-3 text-lg text-nav-muted">{APP_TAGLINE}</p>
+          <ul className="mt-10 space-y-3 border-t border-nav-line pt-8">
             {BRAND_HIGHLIGHTS.map((item) => (
-              <li key={item} className="flex items-center gap-3 text-sm text-sidebar-muted">
+              <li key={item} className="flex items-center gap-3 text-sm text-nav-muted">
                 <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-accent" />
                 {item}
               </li>
@@ -38,19 +38,19 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
           </ul>
         </div>
 
-        <p className="text-xs text-sidebar-muted">Internal use only</p>
+        <p className="text-xs text-nav-muted">Internal use only</p>
       </aside>
 
       <main className="theme-transition flex flex-1 flex-col">
-        <div className="flex items-center justify-between gap-4 bg-sidebar px-5 py-4 text-sidebar-foreground lg:hidden">
+        <div className="flex items-center justify-between gap-4 bg-nav px-5 py-4 text-nav-foreground lg:hidden">
           <div className="flex items-center gap-3">
             <BrandMark size="md" name={env.APP_NAME} />
             <div className="leading-tight">
               <h1 className="font-display text-base font-semibold text-white">{env.APP_NAME}</h1>
-              <p className="text-xs text-sidebar-muted">{APP_TAGLINE}</p>
+              <p className="text-xs text-nav-muted">{APP_TAGLINE}</p>
             </div>
           </div>
-          <div className="text-sidebar-muted hover:text-sidebar-foreground">
+          <div className="text-nav-muted hover:text-nav-foreground">
             <PullCordThemeToggle variant="compact" />
           </div>
         </div>

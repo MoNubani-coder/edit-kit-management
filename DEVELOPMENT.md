@@ -509,12 +509,18 @@ Design and rationale: [docs/ARCHITECTURE.md §12](docs/ARCHITECTURE.md), AD-13
   `suppressHydrationWarning`. See ARCHITECTURE.md AD-15 and §12.7.
 - Visual redesign (ARCHITECTURE.md §12.8): tokenised `Button`, `Badge` (dot
   variant), `Input`, `Label`, `Alert`, `EmptyState`, `PageHeader` (eyebrow),
-  `StatusPage`; `AppShell` rebuilt (17.5 rem rail, brand block, grouped
-  navigation with teal marker, bottom user panel with sign-out and the
-  pull-cord, context top bar with date and initials); dashboard `StatStrip` /
-  `Stat` replacing loose KPI cards, `SectionCard` with tinted header and count
-  chip, table restyle, timeline activity feed, shortcut chips; login frame and
-  card restyled to the same tokens. `src/lib/constants/branding.ts` holds the
+  `StatusPage`; `AppShell` rebuilt as a top-navigation command bar (no
+  sidebar): brand, horizontal primary navigation with teal underline,
+  *Administration* dropdown, date, role chip, compact pull-cord and account
+  menu with sign-out; below `lg` a menu button opens a navigation panel.
+  `PageHeader` is the workspace header (breadcrumb eyebrow, title, actions,
+  optional `SectionTabs`); `SectionTabs` gives Kits and Equipment status tabs
+  and Administration section tabs (`features/admin/components/admin-tabs.tsx`).
+  Dashboard: "Operations status" board (`StatStrip` with two rows of three),
+  `SectionCard` with tinted header and count chip, table restyle, timeline
+  activity feed, shortcut chips. Bookings: search and quick filters
+  (`listBookingsForActor` options, still scoped by `visibilityFor`) above a
+  wide list. Login frame and card restyled to the same tokens. `src/lib/constants/branding.ts` holds the
   tagline and brand highlights.
 - Tests: `tests/unit/datetime.test.ts`, `tests/integration/dashboard.test.ts`,
   `tests/component/pull-cord-theme-toggle.test.tsx` (jsdom + Testing Library).
@@ -594,8 +600,12 @@ rolled back, fixed `now` = 21:00 UTC 3 Sep = 01:00 Dubai 4 Sep):
   back in keeps it; `/login` and the app agree; no hydration warning in the
   console; with "reduce motion" enabled the switch still works without the
   spring-back.
-- [ ] Redesign: rail, top bar, instrument strip, panels and login card read as
-  one product at 1366×768, on a tablet and in a narrow window, in both modes.
+- [ ] Redesign: command bar, Administration dropdown, account menu, workspace
+  headers with tabs, the operations board, panels and the login card read as
+  one product at 1366×768 (full horizontal navigation), on a tablet and in a
+  narrow window (menu button panel), in both modes; no sidebar anywhere.
+- [ ] Bookings: search a booking number or editor, click each filter chip, and
+  clear filters from the empty state.
 
 ---
 

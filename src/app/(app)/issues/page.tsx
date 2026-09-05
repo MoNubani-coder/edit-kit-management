@@ -10,6 +10,7 @@ export default async function IssuesPage() {
 
   return (
     <PlaceholderPage
+      eyebrow="Operations / Issues"
       title="Issues"
       description="Missing, damaged and malfunctioning equipment reports."
       phase={11}

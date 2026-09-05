@@ -10,6 +10,7 @@ export default async function ReportsPage() {
 
   return (
     <PlaceholderPage
+      eyebrow="Operations / Reports"
       title="Reports"
       description="Operational reports, handover and return documents, exports."
       phase={12}

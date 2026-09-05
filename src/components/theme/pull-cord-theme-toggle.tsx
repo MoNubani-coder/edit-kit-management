@@ -81,12 +81,12 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 export interface PullCordThemeToggleProps {
-  /** `sidebar` renders at full size; `compact` at 75 % for the login page. */
-  variant?: 'sidebar' | 'compact'
+  /** `full` renders at 100 %; `compact` at 75 % for the command bar and the login page. */
+  variant?: 'full' | 'compact'
   className?: string
 }
 
-export function PullCordThemeToggle({ variant = 'sidebar', className }: PullCordThemeToggleProps) {
+export function PullCordThemeToggle({ variant = 'full', className }: PullCordThemeToggleProps) {
   const { resolvedTheme, setTheme } = useTheme()
   const mounted = useMounted()
   const reducedMotion = usePrefersReducedMotion()
@@ -188,7 +188,7 @@ export function PullCordThemeToggle({ variant = 'sidebar', className }: PullCord
       onClick={onClick}
       className={cn(
         'group relative inline-flex select-none touch-none items-start justify-center rounded-lg text-current',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-nav',
         dragging ? 'cursor-grabbing' : 'cursor-grab',
         className,
       )}

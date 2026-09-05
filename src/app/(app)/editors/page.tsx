@@ -10,6 +10,7 @@ export default async function EditorsPage() {
 
   return (
     <PlaceholderPage
+      eyebrow="Operations / Editors"
       title="Editors"
       description="Internal and external editors who receive kits."
       phase={6}
