@@ -2,12 +2,12 @@
 
 Running log of what exists, what to test, and what comes next.
 
-- **Current phase:** 3 of 13 — Dashboard, theme switch and visual redesign — ✅ **complete**
+- **Current phase:** 4 of 13 — Equipment / asset management — ✅ **complete**
 - **Status:** verified against PostgreSQL 16.15 — three migrations applied, zero
-  drift, 30/30 database constraint tests, 114/114 Vitest tests (auth,
-  RBAC, routes, dashboard, time zone, theme switch), HTTP smoke test of the
-  built app for every role, typecheck + lint clean, production build clean
-- **Last updated:** 2026-09-03 (Phase 3)
+  drift (no schema change was needed), 30/30 database constraint tests,
+  138/138 Vitest tests, HTTP smoke test of the built app, typecheck + lint
+  clean, production build clean
+- **Last updated:** 2026-09-05 (Phase 4)
 
 Companion documents: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (design and
 rationale) · [docs/ROADMAP.md](docs/ROADMAP.md) (all 13 phases).
@@ -609,18 +609,107 @@ rolled back, fixed `now` = 21:00 UTC 3 Sep = 01:00 Dubai 4 Sep):
 
 ---
 
-## Next: Phase 4 — Asset management
+## Phase 4 — Equipment / asset management (complete)
 
-CRUD for assets and accessories, `AST-NNNNNN` allocation, uniqueness errors as
-field errors, soft delete, status transitions writing `AssetStatusLog`,
-maintenance records (`MNT-YYYY-NNNNNN`) per asset, and the asset history
-timeline. First data-heavy screens: adopt shadcn/ui and build `DataTable`,
-`ConfirmDialog` and breadcrumbs here rather than restyling later.
+Design and rationale: [docs/ARCHITECTURE.md §13](docs/ARCHITECTURE.md) and
+AD-16. User-facing name: **Equipment**. Routes: `/assets`, `/assets/new`,
+`/assets/[id]` (tabs: Accessories, Maintenance, Issues, History),
+`/assets/[id]/edit`, `/admin/categories`.
 
-**Open decisions for Phase 4**
+**What exists**
 
-- Whether ENGINEER may manage assets and maintenance records (`asset.manage`,
-  `maintenance.manage`) or only ADMIN — the matrix currently says ADMIN only.
+- `src/lib/validation/assets.ts` — Zod schemas for equipment, accessories and
+  categories (shared by forms and actions) and the tolerant list-parameter
+  parser (`q`, `category`, `view`, `assignment`, `sort`, `dir`, `page`,
+  `pageSize`).
+- `src/server/dal/assets.dal.ts` — paginated list with search / filters /
+  sort, status counts, exact-barcode lookup, detail, lifecycle context, unified
+  history. `src/server/dal/catalogue.dal.ts` — categories (with equipment
+  counts) and accessory types.
+- `src/server/services/assets.service.ts` — `allowedStatusTransitions`,
+  `assertStatusTransition`, `removalBlocker`, `isAvailableForUse`;
+  `createAsset` (AST number inside the transaction), `updateAsset` (status log
+  + audit), `removeAsset` (soft), `addAccessory` / `updateAccessory` /
+  `removeAccessory`; page loaders. `categories.service.ts` — create, update,
+  activate / deactivate. `errors.ts` — `DomainError` and the P2002 → field
+  mapping; the `action()` wrapper returns DomainErrors as `rejected` results.
+- `src/server/actions/assets.actions.ts`, `accessories.actions.ts`,
+  `categories.actions.ts` — form-action wrappers around `action()`.
+- `src/features/assets/` — toolbar (GET form; the search box is the barcode
+  scan target), sortable paginated table, create / edit form (status choices =
+  allowed transitions, reason on change), summary panels, accessories panel
+  with inline add / edit (URL-driven) and remove, maintenance and issue panels,
+  history timeline. `src/features/admin/components/` — category form and
+  activate / deactivate toggle. New primitives: `Select`, `Textarea`,
+  `FormField`, `Pagination`, `ConfirmSubmitButton`; `AssetStatusBadge`,
+  `MaintenanceStatusBadge`.
+- Tests: `tests/integration/assets.service.test.ts` (each test in
+  `withRollback`) and `tests/integration/assets.actions.test.ts` (the real
+  Server Actions; the whole file runs inside one PostgreSQL transaction that
+  `afterAll` rolls back — `@/server/db/prisma` is mocked with a proxy onto the
+  transaction client, so the real numbering service, audit writes and rows all
+  disappear with it). `npm test` therefore leaves the development database and
+  the `ASSET` counter exactly as found; the suite asserts this itself after the
+  rollback (counter unchanged, no asset, no test users).
+
+**Verification — Phase 4 (2026-09-05)**
+
+| Check | Result |
+|---|---|
+| `npm test` (16 files) | ✅ **138 / 138** |
+| `scripts/db/verify-constraints.sql` | ✅ 30 / 30 PASS |
+| `prisma migrate status` | ✅ 3 migrations, up to date — no schema change needed |
+| `prisma migrate diff --exit-code` | ✅ No difference detected |
+| `npm run check` | ✅ clean |
+| `npm run build` | ✅ clean |
+| HTTP smoke test (`next start`) | ✅ list, tabs, filters, pagination, barcode redirect, detail tabs, new / edit forms, categories admin; VIEWER cannot reach `/assets/new` (403) |
+
+**Decisions taken in Phase 4**
+
+| Decision | Reason |
+|---|---|
+| Workflow statuses (RESERVED, CHECKED_OUT, MAINTENANCE) cannot be edited by hand | They mean "a booking / an inspection / a maintenance record owns this"; the edit form must not bypass those workflows (AD-16) |
+| Active maintenance blocks AVAILABLE and removal | Equipment on the bench is not bookable, whatever its stored status says |
+| Kit members cannot be retired or removed | Kit contents are managed in Phase 5; retiring in place would silently break the kit |
+| Soft delete only; detail page still opens with a "Removed" banner | Inspections, issues and audit rows point at the asset forever |
+| Exact barcode match redirects from the list | The scanner use case: scan, land on the equipment, no extra tap |
+| `Name` is required although the brief omitted it | The schema requires it and the handover form prints it |
+| Categories deactivate, never delete | Assets reference them; a deactivated category disappears from pickers only |
+| Accessories soft-deleted | `AccessoryInspection` rows from past handovers keep their reference |
+| Equipment forms are URL-driven (`?accessory=new`, `?category=<id>`) | State survives refresh and needs no client store; Server Components render the form in place |
+| shadcn/ui still not adopted | The token-based primitives (`Select`, `Textarea`, `FormField`, `Pagination`) covered every Phase 4 need; revisit when a dialog or command palette is required |
+
+**Manual browser checks worth doing**
+
+- [ ] `/assets` at 1366×768 and tablet: status tabs, filters, sortable
+  headers, pagination (set `?pageSize=5`), both themes; `/assets/new` as ADMIN
+  creates and lands on the workspace; duplicate serial shows a field error.
+- [ ] Type or scan `ADM-DEMO-100009` in the search box → lands on the
+  broadcast monitor; `ADM-DEMO-10000` → normal search results.
+- [ ] Edit: status choices are limited; changing status asks for a reason and
+  the History tab shows it; try to make an asset AVAILABLE while a maintenance
+  record is IN_PROGRESS (psql) → refused with the reason.
+- [ ] Accessories: add, edit and remove one; the row disappears but the audit
+  entry stays in History.
+- [ ] `/admin/categories`: create, edit, deactivate; the category leaves the
+  equipment form but stays on existing equipment. As ENGINEER the page is 403.
+
+---
+
+## Next: Phase 5 — Kit management
+
+Kit CRUD, contents editor (add / remove / reorder assets, slot labels, required
+flags), kit software, default checklist template, kit status - all on the
+top-navigation shell with the Kits status tabs already in place. Uses
+`isAvailableForUse` from the equipment service before adding an asset to a kit,
+and the "one active kit per asset" constraint from Phase 1.
+
+**Open decisions for Phase 5**
+
+- Whether ENGINEER may manage kits (`kit.manage`) or only ADMIN — the matrix
+  currently says ADMIN only.
+- Whether removing an asset from a kit should also be offered from the
+  equipment workspace (today it is a kit operation only).
 - Whether the nightly overdue sweep (R-3) lands with bookings in Phase 7 or
   earlier as a standalone job.
 - Rate-limit store for multi-instance deployment, if the target is more than
@@ -628,6 +717,11 @@ timeline. First data-heavy screens: adopt shadcn/ui and build `DataTable`,
 - Hard-deleting a user who has ever signed in fails: `audit_logs.actorUserId`
   is `ON DELETE SET NULL`, but the append-only trigger rejects that update.
   Soft delete (`deletedAt`) is the intended operation and works; user
-  management in Phase 4 should either rely on it exclusively or switch the
-  foreign key to `RESTRICT` (new migration) so the failure reads as a rule,
-  not a surprise.
+  management should either rely on it exclusively or switch the foreign key to
+  `RESTRICT` (new migration) so the failure reads as a rule, not a surprise.
+  Concretely: the two disposable HTTP smoke-test accounts
+  (`smoke-admin@example.test`, `smoke-editor@example.test`) signed in during
+  the Phase 3 / 4 smoke tests and own four `audit_logs` rows, so they cannot be
+  hard-deleted without rewriting audit history. They stay as soft-deleted rows
+  (`deletedAt` set, `DISABLED`, `passwordHash` NULL) and cannot sign in; they
+  are the only non-seed users in the development database.

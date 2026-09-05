@@ -1,4 +1,4 @@
-import type { BookingStatus, IssueSeverity, IssueStatus } from '@prisma/client'
+import type { AssetStatus, BookingStatus, IssueSeverity, IssueStatus, MaintenanceStatus } from '@prisma/client'
 
 import { Badge, type BadgeTone } from '@/components/ui/badge'
 
@@ -27,6 +27,24 @@ const ISSUE_TONES: Record<IssueStatus, BadgeTone> = {
   CLOSED: 'neutral',
 }
 
+const ASSET_TONES: Record<AssetStatus, BadgeTone> = {
+  AVAILABLE: 'green',
+  RESERVED: 'blue',
+  CHECKED_OUT: 'blue',
+  MAINTENANCE: 'amber',
+  DAMAGED: 'amber',
+  MISSING: 'red',
+  RETIRED: 'neutral',
+}
+
+const MAINTENANCE_TONES: Record<MaintenanceStatus, BadgeTone> = {
+  SCHEDULED: 'blue',
+  IN_PROGRESS: 'amber',
+  ON_HOLD: 'amber',
+  COMPLETED: 'green',
+  CANCELLED: 'neutral',
+}
+
 const SEVERITY_TONES: Record<IssueSeverity, BadgeTone> = {
   LOW: 'neutral',
   MEDIUM: 'blue',
@@ -51,6 +69,22 @@ export function BookingStatusBadge({ status }: { status: BookingStatus }) {
 export function IssueStatusBadge({ status }: { status: IssueStatus }) {
   return (
     <Badge tone={ISSUE_TONES[status]} dot>
+      {humanizeStatus(status)}
+    </Badge>
+  )
+}
+
+export function AssetStatusBadge({ status }: { status: AssetStatus }) {
+  return (
+    <Badge tone={ASSET_TONES[status]} dot>
+      {humanizeStatus(status)}
+    </Badge>
+  )
+}
+
+export function MaintenanceStatusBadge({ status }: { status: MaintenanceStatus }) {
+  return (
+    <Badge tone={MAINTENANCE_TONES[status]} dot>
       {humanizeStatus(status)}
     </Badge>
   )

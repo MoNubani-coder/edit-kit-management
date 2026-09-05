@@ -1,8 +1,8 @@
 # Edit Kit Management System — Architecture
 
-**Status:** Phase 3 (dashboard and login redesign) — complete. Phases 1 and 2
-— complete.
-**Last updated:** 2026-09-03
+**Status:** Phase 4 (equipment / asset management) — complete. Phases 1–3 —
+complete.
+**Last updated:** 2026-09-05
 
 ---
 
@@ -563,6 +563,21 @@ planned: a booking is overdue when it is flagged `OVERDUE` or is
 cache exists; every number is one `count` / `GROUP BY` or one bounded
 `findMany` against an existing index (§12.4).
 
+### AD-16 — Equipment status is owned by whoever changes it
+
+`Asset.status` has two kinds of value. RESERVED, CHECKED_OUT and MAINTENANCE
+are *workflow* statuses: bookings, handover / return and maintenance records
+set and clear them, and the edit form cannot touch them
+(`allowedStatusTransitions` in `server/services/assets.service.ts`). AVAILABLE,
+DAMAGED, MISSING and RETIRED are *manual* statuses a person may set, with two
+guards: nothing becomes AVAILABLE while a maintenance record is IN_PROGRESS or
+ON_HOLD, and nothing is RETIRED (or removed) while it is a member of a kit.
+Every change writes an `AssetStatusLog` row and an audit entry in the same
+transaction as the update, and the AST number is allocated inside that
+transaction, so a failed insert never burns a number (AD-1). Equipment is never
+hard-deleted: `deletedAt` hides it from lists, pickers and kits while
+inspections, issues and history keep resolving.
+
 ### AD-15 — Theme is a class on <html>; colours are tokens
 
 Light and dark are two sets of CSS custom properties (`src/app/globals.css`)
@@ -633,6 +648,9 @@ edit-kit-management/
 │  │  ├─ dashboard/components/            # Phase 3: dashboard-view, kpi-card, section-card,
 │  │  │                                   #   bookings-table, issues-table, activity-feed,
 │  │  │                                   #   quick-actions, editor-dashboard
+│  │  ├─ assets/                          # Phase 4: hrefs.ts + components (toolbar, table, form,
+│  │  │                                   #   summary, accessories, maintenance, issues, history)
+│  │  ├─ admin/components/                # admin-tabs, category-form, category-active-toggle
 │  │  ├─ bookings/  kits/  assets/  editors/  issues/
 │  │  ├─ inspections/               # the wizard lives here
 │  │  ├─ signatures/                # SignaturePad
@@ -654,10 +672,13 @@ edit-kit-management/
 │  │  │  ├─ route-policy.ts         #   public / authenticated / permission per path
 │  │  │  ├─ rate-limit.ts           #   LoginRateLimiter seam + in-memory default
 │  │  │  └─ errors.ts               #   UnauthorizedError / ForbiddenError
-│  │  ├─ dal/                       # authorised reads (bookings.dal.ts scopes EDITOR; dashboard.dal.ts)
+│  │  ├─ dal/                       # authorised reads (bookings, dashboard, assets, catalogue)
 │  │  ├─ actions/                   # server actions (auth.actions.ts, admin-users.actions.ts)
 │  │  ├─ services/                  # business logic, transaction-aware
 │  │  │  ├─ dashboard.service.ts    # Phase 3: buildDashboard (permission-gated assembly)
+│  │  │  ├─ assets.service.ts       # Phase 4: lifecycle rules, create/update/remove, accessories
+│  │  │  ├─ categories.service.ts   # Phase 4: create/update/activate categories
+│  │  │  ├─ errors.ts               # DomainError + unique-violation mapping
 │  │  │  ├─ booking.service.ts
 │  │  │  ├─ handover.service.ts
 │  │  │  ├─ return.service.ts
@@ -1199,3 +1220,109 @@ template:
 - **Status:** square-cornered chips with a leading dot; red only for overdue
   and critical.
 - **Empty states:** dashed frame, teal-tinted icon, one plain sentence.
+
+---
+
+## 13. Equipment (Phase 4)
+
+### 13.1 Shape
+
+```
+ /assets                     loadEquipmentList(query)      requirePermission('asset.read')
+ /assets/new                 AssetForm  -> createAssetFormAction   action({ permission: 'asset.manage', schema })
+ /assets/[id]                loadAssetWorkspace(actor, id) detail + history + lifecycle, gated per section
+ /assets/[id]/edit           AssetForm  -> updateAssetFormAction
+ /admin/categories           listCategories / create / update / setCategoryActive  (admin.categories.manage)
+
+ pages ──▶ services (assets.service.ts, categories.service.ts) ──▶ DAL (assets.dal.ts, catalogue.dal.ts) ──▶ Prisma
+ forms ──▶ Server Actions (action() wrapper) ──▶ services
+```
+
+Pages guard with `requirePermissionForPage`, then call the service. Services
+receive an `Actor` and never touch the session. The DAL has explicit selects
+everywhere and returns flat rows; nothing about users leaves it except the
+display name on a status-log entry.
+
+### 13.2 List, search and pagination
+
+`listAssets` builds one `where` from the URL - status tab (a set of stored
+statuses per tab), category, kit assignment (`kitAssets some / none removedAt
+null`) and a search term matched with the trigram indexes on asset code, ADM
+barcode, serial number, name and model plus manufacturer - then runs `count`
+and a `findMany` with `skip` / `take` (default 25) and a stable secondary
+order. The current kit is loaded through the relation with `take: 1` (one
+batched query, not one per row). Tab counts come from one `GROUP BY status`.
+Every list state is a URL (`features/assets/hrefs.ts`), so pages can be
+bookmarked and pagination is a link.
+
+**Barcode scanner:** the search box is the scan target. Before rendering, the
+list page asks `findAssetIdByBarcode` for an *exact* match on an asset's or an
+accessory's ADM barcode (both unique B-tree indexes) and redirects to the
+equipment when it finds one; anything else falls through to the normal search.
+
+### 13.3 Lifecycle
+
+See AD-16. The edit form only offers the transitions the server allows for that
+asset, asks for a reason when the status changes, and the service re-checks the
+transition against the database facts (`getAssetLifecycleContext`: in a kit,
+active maintenance, live booking on the kit). New equipment may be recorded as
+AVAILABLE, DAMAGED or MISSING. `isAvailableForUse` (AVAILABLE, not removed, no
+active maintenance) is the rule later phases use before booking or handing over
+an asset.
+
+### 13.4 Accessories, maintenance, issues, history
+
+Accessories are rows against `AccessoryType` - the catalogue seeded in Phase 1
+- with an optional label, quantity, serial, barcode and "required at handover"
+flag; they are soft-deleted so `AccessoryInspection` lines from past handovers
+keep their reference. Maintenance and issues are shown read-only on the
+equipment workspace (tabs appear only with `maintenance.read` /
+`issue.read`). The history trail merges six sources in memory from six
+concurrent indexed queries: status log, kit membership (added / removed),
+inspection lines (checked out / returned under BK-…), issues (reported /
+resolved), maintenance (scheduled / started / completed / cancelled) and the
+asset's own audit entries (added, details updated, accessories, removed) -
+newest first, capped at 100, raw audit payloads never included.
+
+### 13.5 Categories
+
+Administration › Categories lists every category with its live equipment
+count, creates and edits (code derived from the name when omitted, uniqueness
+enforced by the database and mapped to field errors) and activates or
+deactivates. There is no delete: deactivation removes a category from the
+pickers, existing equipment keeps it, and the edit form keeps a deactivated
+category selectable for the asset that already has it.
+
+### 13.6 Permissions
+
+| Capability | Permission | ADMIN | ENGINEER | VIEWER | EDITOR |
+|---|---|:-:|:-:|:-:|:-:|
+| List, search, open equipment | `asset.read` | ✓ | ✓ | ✓ | |
+| Create, edit, remove equipment; manage accessories | `asset.manage` | ✓ | | | |
+| Maintenance tab | `maintenance.read` | ✓ | ✓ | | |
+| Issues tab | `issue.read` | ✓ | ✓ | | |
+| Categories administration | `admin.categories.manage` | ✓ | | | |
+
+Every mutation goes through `action()` with the permission named; the UI hides
+what the actor cannot do, and the server refuses it regardless.
+
+### 13.7 Tests
+
+`tests/integration/assets.service.test.ts` (rolled-back transactions):
+consecutive AST codes with status log and audit; duplicate barcode and serial
+mapped to field errors by the database constraint; unknown / inactive category
+refused without consuming a number; search by barcode, serial and manufacturer;
+exact barcode resolution including accessory barcodes; category, status-view
+and assignment filters; pagination and sort stability; detail assembly with and
+without the maintenance / issue permissions; history ordering and content; no
+sensitive fields; active maintenance blocks availability and removal; checked-
+out equipment locked; manual transitions recorded; soft removal and kit-member
+refusal; unknown accessory type refused. `tests/integration/assets.actions.test.ts`
+(real Server Actions with a stubbed session, run inside a single transaction
+that is rolled back after the file — the `prisma` export is a proxy onto the
+transaction client, so numbering, audit and the `NEXT_REDIRECT` path are all
+real and nothing persists): anonymous list rejected, VIEWER can list, VIEWER
+and ENGINEER cannot create or edit, validation errors, ADMIN creates, is
+audited and redirected, accessory authorization; the rollback is verified
+against the database (counter, rows, users unchanged). 138 tests in 16 files
+pass.

@@ -52,15 +52,22 @@ shadcn/ui adoption, `DataTable`, `ConfirmDialog`, `Stepper`, breadcrumbs.
 
 ---
 
-## Phase 4 — Asset management
+## Phase 4 — Asset management ✅ COMPLETE
 
-CRUD for assets and accessories, `AST-NNNNNN` allocation, uniqueness errors
-surfaced as field errors, soft delete, status transitions writing
-`AssetStatusLog`, maintenance records (`MNT-YYYY-NNNNNN`) against an asset, and
-the asset history timeline.
+Delivered as **Equipment** on the top-navigation shell: paginated, searchable
+inventory with status tabs, category and kit-assignment filters and sortable
+columns; barcode-scanner path (an exact ADM barcode opens the equipment);
+create and edit with `AST-NNNNNN` allocation and database-enforced uniqueness
+surfaced as field errors; lifecycle rules (workflow statuses locked, active
+maintenance blocks availability, kit members cannot be retired or removed);
+soft delete with preserved history; accessories on the managed
+`AccessoryType` vocabulary; maintenance and issue panels; the unified history
+trail; Administration › Categories (list, create, edit, activate / deactivate).
+Maintenance records are read-only here - the maintenance workflow itself is a
+later phase.
 
 **Test:** two assets cannot share a serial number or ADM barcode; a soft-deleted
-asset disappears from pickers but its history survives.
+asset disappears from lists but its history survives. Both are automated.
 
 ---
 

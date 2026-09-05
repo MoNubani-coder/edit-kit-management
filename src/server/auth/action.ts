@@ -2,6 +2,8 @@ import 'server-only'
 
 import type { z } from 'zod'
 
+import { DomainError } from '@/server/services/errors'
+
 import { isAuthorizationError } from './errors'
 import type { Permission } from './permissions'
 import { type Actor, requireAuth, requirePermission } from './session'
@@ -19,9 +21,10 @@ import { type Actor, requireAuth, requirePermission } from './session'
  *  3. Safe failure - authorization and validation problems come back as a
  *     typed result the form can render, never as a stack trace.
  *
- * Handlers may throw `ActionError` for expected business failures ("user not
- * found", "cannot suspend yourself"). Any other exception is logged and
- * reported generically, so internals never reach the browser.
+ * Handlers may throw `ActionError` (or a service's `DomainError`) for expected
+ * business failures ("user not found", "serial number already used"). Any
+ * other exception is logged and reported generically, so internals never reach
+ * the browser.
  */
 
 export type ActionPermission = Permission | readonly Permission[] | 'authenticated'
@@ -98,7 +101,7 @@ export function action<Schema extends z.ZodType, Output>(
       const data = await definition.handler({ actor, input: parsed.data })
       return { ok: true, data }
     } catch (error) {
-      if (error instanceof ActionError) {
+      if (error instanceof ActionError || error instanceof DomainError) {
         return { ok: false, error: 'rejected', message: error.message, fieldErrors: error.fieldErrors }
       }
       // Next.js control-flow errors (redirect, notFound, forbidden) must pass through untouched.
