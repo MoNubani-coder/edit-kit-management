@@ -92,10 +92,23 @@ its software and checklist. Every rule behind it is automated (36 tests).
 
 ---
 
-## Phase 6 — Editor management
+## Phase 6 — Editor management ✅ COMPLETE
 
-Editor profiles including external editors with no login; search by name/staff
-ID; per-editor booking history.
+Delivered on the top-navigation shell: the editor directory with Internal /
+External / Active / Inactive tabs, search by name, staff ID, contact number and
+email (an exact staff ID opens the editor), server-side pagination and booking
+figures per row; the editor workspace with Overview, Active bookings, Booking
+history, Issues and Activity tabs; create and edit with database-enforced staff
+ID uniqueness; external editors with no account and internal editors with an
+optional, audited account link (AD-18); deactivation instead of deletion, with
+history preserved and inactive editors excluded from the booking picker; the
+`searchEditorsForPicker` lookup Phase 7 will use; three new `AuditAction`
+values by migration. Signatures (Phase 8) already have their
+`signerEditorProfileId` target.
+
+**Test:** an external editor with no login appears in the directory, can be
+chosen for a booking while active, and keeps every booking after deactivation.
+Automated (24 tests).
 
 ---
 

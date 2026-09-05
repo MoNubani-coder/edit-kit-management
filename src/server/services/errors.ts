@@ -37,7 +37,7 @@ export function uniqueViolationField(error: unknown): string | null {
       ? target
       : String(candidate.meta?.constraint ?? candidate.message ?? '')
 
-  for (const field of ['serialNumber', 'admBarcode', 'assetCode', 'kitCode', 'name', 'code']) {
+  for (const field of ['serialNumber', 'admBarcode', 'assetCode', 'kitCode', 'staffId', 'userId', 'name', 'code']) {
     if (new RegExp(`(^|[^a-zA-Z])${field}([^a-zA-Z]|$)`, 'i').test(text)) return field
   }
   return 'unique'

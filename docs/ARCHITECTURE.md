@@ -1,6 +1,6 @@
 # Edit Kit Management System — Architecture
 
-**Status:** Phase 5 (kit management) — complete. Phases 1–4 — complete.
+**Status:** Phase 6 (editor management) — complete. Phases 1–5 — complete.
 **Last updated:** 2026-09-05
 
 ---
@@ -612,6 +612,28 @@ the rule exists exactly once.
 was decided) and the availability badge (what the equipment allows), and the
 notice lists the equipment standing in the way.
 
+### AD-18 — The editor profile is the identity; an account is optional
+
+**Decision.** `EditorProfile` is what a booking, a handover and a signature
+refer to. It exists for every editor, internal or external. `User` is an
+authentication concern and is attached to a profile only when an internal
+editor needs to sign in (`EditorProfile.userId`, nullable, unique). Type is a
+stored fact (`isExternal`), never inferred from the presence of an account.
+
+**Why.** Most editors who receive kits are external and will never have a
+login (R-1: they sign in person on the engineer's device). Forcing a User per
+editor would mean inventing accounts nobody uses, and inferring "internal"
+from an account would misclassify every internal editor created before their
+account is linked. Keeping the identity on the profile also means an account
+can be disabled, deleted or re-linked without a single booking losing its
+editor.
+
+**Consequence.** Linking is an explicit, audited operation with its own rules
+(15.3); deactivation is the way an editor leaves (15.4); the booking picker
+reads profiles, not users; and Phase 8 signatures point at
+`signerEditorProfileId` with a name snapshot, exactly as the schema already
+provides.
+
 ## 6. Folder structure
 
 ```
@@ -628,7 +650,8 @@ edit-kit-management/
 │  │  ├─ 20260903000000_init/
 │  │  ├─ 20260903000100_integrity_constraints_and_search_indexes/
 │  │  ├─ 20260903000200_maintenance_records/
-│  │  └─ 20260905134441_kit_audit_actions/   # five AuditAction values (Phase 5)
+│  │  ├─ 20260905134441_kit_audit_actions/   # five AuditAction values (Phase 5)
+│  │  └─ 20260905143330_editor_audit_actions/ # three AuditAction values (Phase 6)
 │  └─ seed/
 │     ├─ index.ts                   # orchestrator
 │     ├─ 01-users.ts
@@ -673,6 +696,8 @@ edit-kit-management/
 │  │  ├─ kits/                            # Phase 5: hrefs.ts + components (toolbar, table, form, overview,
 │  │  │                                   #   availability badge / notice, equipment panel, asset picker,
 │  │  │                                   #   member / software / checklist forms, history)
+│  │  ├─ editors/                         # Phase 6: hrefs.ts + components (badges, toolbar, table, form,
+│  │  │                                   #   overview, account forms, action forms, bookings, issues, activity)
 │  │  ├─ admin/components/                # admin-tabs, category-form, category-active-toggle
 │  │  ├─ bookings/  kits/  assets/  editors/  issues/
 │  │  ├─ inspections/               # the wizard lives here
@@ -695,14 +720,15 @@ edit-kit-management/
 │  │  │  ├─ route-policy.ts         #   public / authenticated / permission per path
 │  │  │  ├─ rate-limit.ts           #   LoginRateLimiter seam + in-memory default
 │  │  │  └─ errors.ts               #   UnauthorizedError / ForbiddenError
-│  │  ├─ dal/                       # authorised reads (bookings, dashboard, assets, catalogue, kits)
+│  │  ├─ dal/                       # authorised reads (bookings, dashboard, assets, catalogue, kits, editors)
 │  │  ├─ actions/                   # server actions (auth, admin-users, assets, accessories, categories,
-│  │  │                             #   kits, kit-composition)
+│  │  │                             #   kits, kit-composition, editors)
 │  │  ├─ services/                  # business logic, transaction-aware
 │  │  │  ├─ dashboard.service.ts    # Phase 3: buildDashboard (permission-gated assembly)
 │  │  │  ├─ assets.service.ts       # Phase 4: lifecycle rules, create/update/remove, accessories
 │  │  │  ├─ categories.service.ts   # Phase 4: create/update/activate categories
 │  │  │  ├─ kits.service.ts         # Phase 5: kit lifecycle, assignment rules, availability, composition
+│  │  │  ├─ editors.service.ts      # Phase 6: editor lifecycle, account linking, deactivation, picker
 │  │  │  ├─ errors.ts               # DomainError + unique-violation mapping
 │  │  │  ├─ booking.service.ts
 │  │  │  ├─ handover.service.ts
@@ -1565,3 +1591,133 @@ artefact. Production code is untouched by it (the counter is authoritative and
 gap-free from here on), and the sequence is deliberately not reset here; if
 the local database is ever rebuilt (`npm run db:reset`) the discrepancy
 disappears.
+
+---
+
+## 15. Editors (Phase 6)
+
+### 15.1 Shape
+
+Editors live at `/editors` (directory), `/editors/new`, `/editors/[id]`
+(workspace with Overview, Active bookings, Booking history, Issues and Activity
+tabs driven by `?tab=`, the booking tabs paginated by `?page=`) and
+`/editors/[id]/edit`, all on the top-navigation shell. Layers follow Phases 4
+and 5: `server/dal/editors.dal.ts` (reads with explicit selects),
+`server/services/editors.service.ts` (rules and mutations, each in one
+transaction with its audit entry), `server/actions/editors.actions.ts` (built
+with `action()`, all `editor.manage`), `features/editors/` (UI). No Prisma in
+client components; no rule in React.
+
+### 15.2 Internal and external editors
+
+`EditorProfile.isExternal` already carried the distinction (Phase 1), so the
+type is stored, not inferred: an internal editor exists before - and without -
+an account, and the UI presents the boolean as Internal / External. External
+editors have no account by design (R-1: they sign in person on the engineer's
+device); internal editors *may* be linked to one. The profile is the identity
+that bookings, inspections and signatures point at (`Booking.editorId`,
+`Signature.signerEditorProfileId`, with the name and staff id snapshotted at
+signing time), which is why it is never destroyed once it has history.
+
+### 15.3 Account link (AD-18)
+
+`EditorProfile.userId` is nullable and unique: one account per profile, one
+profile per account, optional. Linking is an explicit, audited operation
+(`linkEditorUser` / `unlinkEditorUser`, `EDITOR_USER_LINKED` /
+`EDITOR_USER_UNLINKED`), also offered inline when creating an internal editor.
+Rules, checked in the transaction and backed by the unique index:
+
+- only internal editors take an account (make the editor internal first);
+- the account must exist, not be deleted and not be `DISABLED`;
+- the account must not already belong to another editor (the message names
+  that editor; the database refuses the race);
+- an editor already holding an account must unlink before taking another;
+- an editor cannot be made external while linked.
+
+No account is ever created here. The link is what gives a signed-in EDITOR
+`booking.readOwn` over these bookings; it is not a route to the directory.
+
+### 15.4 Lifecycle and history
+
+- **Deactivation**, not deletion: `isActive = false` (`EDITOR_STATUS_CHANGED`
+  with the operator's reason). An inactive editor disappears from the booking
+  picker and is refused for new bookings, while every past booking, handover
+  and signature keeps its editor and the workspace still opens. Deactivation
+  is refused while the editor holds a live booking - a kit out with someone
+  must be returned or the booking cancelled first.
+- **Removal** is a soft delete (`deletedAt`, `isActive = false`, account
+  unlinked) and is refused for any profile with booking or signature history.
+  `Booking.editorId` is `ON DELETE RESTRICT`, so even a direct delete could
+  not orphan a booking.
+- Edits are diffed and audited as `UPDATE`; staff id uniqueness is
+  database-enforced and surfaced as a field error.
+
+### 15.5 Directory, search and the booking picker
+
+One `count` plus one page query, sorted by name, staff id or last update; a
+third grouped query adds total bookings per editor on the page (no N+1). Each
+row carries the linked account (name and status only), the live booking count
+(`_count` with the live-status filter) and the latest booking. Search is one
+`OR` over name, staff id, contact number and email through the trigram indexes;
+an exact staff id (case-insensitive, unique index) redirects to the editor.
+Tabs: All · Internal · External · Active · Inactive, counted from one
+`GROUP BY isExternal, isActive`.
+
+For Phase 7, `searchActiveEditors` / `searchEditorsForPicker` return active,
+live editors by name, staff id or contact number with an exact staff id first,
+and never an inactive or removed profile. `findEditorIdByStaffId` is the
+scanner path.
+
+### 15.6 Bookings, issues and activity
+
+`listEditorBookings` serves both booking tabs from the database: `active` =
+RESERVED · READY_FOR_HANDOVER · CHECKED_OUT · OVERDUE · RETURN_INSPECTION,
+soonest first; `history` = every booking, newest first; both paginated. Rows
+carry booking number, kit, start, collection, expected and actual return,
+status and the engineer's display name - nothing else about anyone. Issues
+raised on the editor's bookings appear with `issue.read`. Activity merges the
+profile's audit entries with booking milestones (created, collected, returned,
+cancelled) into the shared `Timeline`.
+
+### 15.7 Permissions
+
+`editor.read`: ADMIN, ENGINEER. `editor.manage`: ADMIN. VIEWER keeps its
+existing matrix (no editor directory). EDITOR has neither: `/editors` is 403
+and their own bookings come through `booking.readOwn`, scoped in the bookings
+DAL. Pages check with `requirePermissionForPage`, actions with
+`action({ permission: 'editor.manage' })`. `kit.manage` stays ADMIN-only
+(Phase 6 decision).
+
+### 15.8 Audit
+
+`CREATE`, `UPDATE`, `DELETE` are reused for the profile itself. Activation and
+account linkage are security-relevant events with their own vocabulary -
+`EDITOR_STATUS_CHANGED`, `EDITOR_USER_LINKED`, `EDITOR_USER_UNLINKED` - added
+by migration `20260905143330_editor_audit_actions` (three `ALTER TYPE … ADD
+VALUE`; no existing migration touched). Every entry uses
+`entityType 'EditorProfile'`.
+
+### 15.9 Tests
+
+`tests/integration/editors.service.test.ts` (14, each in `withRollback`):
+external editor created without an account and audited; internal editor
+without an account, then linked and unlinked with both audit entries;
+one-step optional link and the external-with-account refusal; duplicate
+staff id as a database-enforced field error; schema normalisation and
+rejections; search by name / staff id / contact / email and exact staff-id
+resolution; type and status filters with tab counts; pagination, sort and
+per-row booking figures; no credentials or lockout state in any read; active
+bookings scoped to live statuses and history newest first with pagination;
+inactive editors out of the picker while history stays readable, deactivation
+blocked by a live booking, reactivation; removal refused with history and
+soft removal without; edits, linked-to-external refusal and audit diff; link
+rules (disabled, deleted, external, unknown, second editor for one account,
+second account for one editor, seeded account not offered) and the unique
+index as the final authority. `tests/integration/editors.actions.test.ts`
+(10, one rolled-back transaction): anonymous rejected; ENGINEER lists the
+seeded editors; VIEWER refused; EDITOR refused the directory and any workspace
+while `booking.readOwn` still resolves their own profile; VIEWER / ENGINEER
+cannot create; validation before the database; ADMIN creates, audited,
+redirected; ENGINEER cannot edit or deactivate; link authorisation and rules
+through the action layer; deactivate / reactivate audited. 198 tests in 20
+files pass; the database and counters are unchanged after two consecutive runs.

@@ -2,12 +2,12 @@
 
 Running log of what exists, what to test, and what comes next.
 
-- **Current phase:** 5 of 13 — Kit management — ✅ **complete**
-- **Status:** verified against PostgreSQL 16.15 — four migrations applied, zero
-  drift, 30/30 database constraint tests, 174/174 Vitest tests (two consecutive
+- **Current phase:** 6 of 13 — Editor management — ✅ **complete**
+- **Status:** verified against PostgreSQL 16.15 — five migrations applied, zero
+  drift, 30/30 database constraint tests, 198/198 Vitest tests (two consecutive
   runs, database and numbering counters unchanged), typecheck + lint clean,
   production build clean
-- **Last updated:** 2026-09-05 (Phase 5)
+- **Last updated:** 2026-09-05 (Phase 6)
 
 Companion documents: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (design and
 rationale) · [docs/ROADMAP.md](docs/ROADMAP.md) (all 13 phases).
@@ -110,7 +110,7 @@ once.
 ### 3. Migrate and seed
 
 ```powershell
-npm run db:migrate     # applies all four migrations
+npm run db:migrate     # applies all five migrations
 npm run db:seed        # idempotent - safe to re-run
 npm run dev
 ```
@@ -819,20 +819,138 @@ suites were isolated; the counter is left as is (development only, and
 
 ---
 
-## Next: Phase 6 — Editor management
+## Phase 6 — Editor management (complete)
 
-Editor profiles including external editors with no login; search by name and
-staff ID; per-editor booking history - on the top-navigation shell with the
-Editors tab already in place.
+The editor directory on the top-navigation shell: internal and external
+editors, the editor workspace with Overview / Active bookings / Booking
+history / Issues / Activity tabs, create and edit, optional account linking
+for internal editors, deactivation instead of deletion, and the picker search
+Phase 7 will use. Design in
+[docs/ARCHITECTURE.md §15](docs/ARCHITECTURE.md#15-editors-phase-6) and AD-18.
+
+**What exists**
+
+- Migration `20260905143330_editor_audit_actions` - three new `AuditAction`
+  values (`EDITOR_STATUS_CHANGED`, `EDITOR_USER_LINKED`,
+  `EDITOR_USER_UNLINKED`). Nothing else changed: `EditorProfile.isExternal`
+  (type), `userId` (optional unique account link) and `staffId` (unique)
+  already existed.
+- `src/lib/validation/editors.ts` - profile, activation, link and
+  list-parameter schemas; staff-id pattern (`EDT-2210`, `EXT-5001`).
+- `src/server/dal/editors.dal.ts` - paginated directory with per-row booking
+  figures, tab counts, exact staff-id lookup, picker search, detail, lifecycle
+  context, account-link facts and linkable accounts, paginated active /
+  history bookings, issues on the editor's bookings, activity.
+- `src/server/services/editors.service.ts` - `editorRemovalBlocker`,
+  `editorDeactivationBlocker`, `userLinkBlocker`; `createEditor`,
+  `updateEditor`, `setEditorActive`, `linkEditorUser`, `unlinkEditorUser`,
+  `removeEditor`; loaders and `searchEditorsForPicker`.
+- `src/server/actions/editors.actions.ts` - all `editor.manage`, all through
+  `action()`. `server/services/errors.ts` now maps `staffId` and `userId`
+  unique violations to their fields.
+- Pages: `/editors`, `/editors/new`, `/editors/[id]` (tabs), `/editors/[id]/edit`.
+- `src/features/editors/` - `hrefs.ts`; components: badges, toolbar, table,
+  form, overview (contact / account / bookings panels), account link and
+  unlink forms, deactivate / reactivate / remove forms, bookings table, issues
+  panel, activity timeline.
+- Tests: `tests/integration/editors.service.test.ts`,
+  `tests/integration/editors.actions.test.ts`.
+
+**Verification — Phase 6 (2026-09-05)**
+
+| Check | Result |
+|---|---|
+| `npm test` run 1 (20 files) | ✅ **198 / 198** |
+| `npm test` run 2 (20 files) | ✅ **198 / 198** |
+| Database after both runs | ✅ ASSET counter 14 and MAINTENANCE counter 1 before and after; 3 editors, 6 users, 0 bookings, 33 audit rows, 0 test editors / users / bookings / editor audit rows |
+| `scripts/db/verify-constraints.sql` | ✅ 30 / 30 PASS, rolled back |
+| `prisma migrate status` | ✅ 5 migrations, up to date |
+| `prisma migrate diff --exit-code` | ✅ No difference detected |
+| `npm run check` | ✅ clean |
+| `npm run build` | ✅ clean, all editor routes compiled |
+
+**What the 24 editor tests prove** (`npm test`; every write inside a rolled-back
+transaction):
+
+*Model* — an external editor is created with no account; an internal editor
+is created without one and linked later, or linked in the same step; an
+external editor cannot take an account; a duplicate staff ID is refused by the
+database and reported as a field error; input is normalised (upper-case staff
+ID, lower-case email) and malformed values are rejected.
+
+*Directory* — search by name, staff ID, contact number and email; an exact
+staff ID resolves directly; type and status filters with tab counts;
+pagination and sort; booking figures per row without an N+1; no read exposes
+credentials, lockout state or internal ids.
+
+*Bookings* — active bookings are exactly the live statuses, soonest first;
+history is every booking newest first, paginated; activity is chronological.
+
+*Lifecycle* — a live booking blocks deactivation; an inactive editor leaves
+the picker and the active list while its bookings, detail and audit stay
+readable; reactivation returns it; an editor with history cannot be removed;
+one without is soft-removed and unlinked; a linked editor cannot become
+external; edits are diffed and audited once.
+
+*Accounts* — disabled, deleted and unknown accounts are refused; external
+editors cannot be linked; one account cannot serve two editors and one editor
+cannot hold two accounts; the seeded internal editor's account is not offered;
+the unique index is the final authority.
+
+*Authorisation* — anonymous rejected; ENGINEER reads; VIEWER refused; EDITOR
+refused the directory and workspaces while `booking.readOwn` resolves their
+own profile; only ADMIN creates, edits, deactivates, links and unlinks; every
+mutation redirects on success and returns a typed result on failure.
+
+**Decisions taken in Phase 6**
+
+| Decision | Reason |
+|---|---|
+| Type is the stored `isExternal` flag, shown as Internal / External | Already in the schema; never inferred from an account, so an internal editor can exist before being linked |
+| Accounts are linked, never created, and only to internal editors | External editors sign in person (R-1); creating logins nobody uses would be noise and risk |
+| `DISABLED` and deleted accounts cannot be linked; `INVITED` / `SUSPENDED` can | Disabled and deleted are terminal; invited and suspended are transitional states of a real person |
+| Deactivation is refused while a live booking exists | A kit out with someone must come back under a live editor; deactivate after return or cancellation |
+| Removal is soft and only for profiles with no history | Bookings and signatures reference the profile forever (`ON DELETE RESTRICT`) |
+| VIEWER keeps no `editor.read` | Unchanged matrix; the directory holds contact details |
+| `kit.manage` stays ADMIN-only | Phase 6 decision as instructed; engineers read kits operationally |
+| Linked account email shown to `editor.manage` only | Identifies the account for the administrator; other readers see name, role and status |
+
+**Manual browser checks worth doing**
+
+- [ ] `/editors` at 1366×768 and tablet as ENGINEER: five tabs with counts,
+  the seeded Layla Hassan (Internal, linked) and EXT-5001 / EXT-5002
+  (External, no account); search `EDT-2210` jumps to the editor; both themes.
+- [ ] As ADMIN: create an external editor (no account section shown), then an
+  internal one and link `viewer@example.ae`; the Account panel shows the
+  account, Unlink works, Activity lists both entries.
+- [ ] Try to make the linked editor external → refused with the field error;
+  unlink, then it succeeds.
+- [ ] Deactivate an editor with no live booking → Inactive badge, no longer in
+  the Active tab; Reactivate returns it. Remove is offered only for a profile
+  with no bookings.
+- [ ] As VIEWER and as EDITOR: `/editors` is 403; the editor's own dashboard
+  still shows their bookings.
+
+---
+
+## Next: Phase 7 — Booking management
+
+Booking CRUD with `BK-YYYY-NNNNNN`, the kit availability calendar, the
+checklist snapshot on creation, status transitions and cancellation - on the
+top-navigation shell with the Bookings tabs already in place. Uses
+`getKitAvailability` (Phase 5) before reserving a kit and
+`searchEditorsForPicker` (Phase 6) to choose the editor; only active editors
+and ready kits may be booked.
 
 **Open decisions carried forward**
 
-- Whether ENGINEER may manage kits (`kit.manage`) or only ADMIN — still ADMIN
-  only after Phase 5.
+- Whether ENGINEER may manage kits (`kit.manage`) — still ADMIN only.
 - Whether removing an asset from a kit should also be offered from the
   equipment workspace (today it is a kit operation only).
 - Whether the nightly overdue sweep (R-3) lands with bookings in Phase 7 or
   earlier as a standalone job.
+- Whether a booking may be created for an editor without a staff ID, and
+  whether external editors need a company recorded before their first booking.
 - Rate-limit store for multi-instance deployment, if the target is more than
   one container.
 - Hard-deleting a user who has ever signed in fails: `audit_logs.actorUserId`
