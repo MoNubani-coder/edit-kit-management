@@ -550,6 +550,8 @@ const AUDIT_KINDS: Partial<Record<AuditAction, BookingActivityKind>> = {
   BOOKING_CANCELLED: 'cancelled',
   HANDOVER_STARTED: 'handover',
   HANDOVER_COMPLETED: 'handover',
+  SIGNATURE_SUBMITTED: 'handover',
+  SIGNATURE_VOIDED: 'handover',
   RETURN_STARTED: 'return',
   RETURN_COMPLETED: 'return',
 }

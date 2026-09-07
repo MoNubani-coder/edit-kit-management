@@ -139,16 +139,25 @@ are submitted at the same moment (the exclusion constraint, not a UI check).
 
 ---
 
-## Phase 8 — Handover workflow
+## Phase 8 — Handover / collection ✅ COMPLETE
 
-The seven-step wizard. Auto-loads kit contents into inspection lines, per-item
-status + notes + photos, software check, checklist, review. Optimistic
-concurrency (R-6). Completion transaction: inspection locked, booking
-`CHECKED_OUT`, kit and assets `CHECKED_OUT`, audit written.
+Delivered on the top-navigation shell: the handover workspace at
+`/bookings/[id]/handover` for READY_FOR_HANDOVER bookings - identities, then
+equipment (every kit item with its accessories, condition per line, case
+condition), checklist and software (the booking's checklist copied from the
+template when the handover starts, software snapshotted the same way), both
+signatures captured on the device with a canvas pad (mouse, touch, stylus) and
+attributed by the server, and a completion that re-checks eligibility, the
+Phase 5 readiness rule, every answer and both signatures inside one
+Serializable, row-locked transaction before freezing the document and moving
+the booking to CHECKED_OUT with a server collection time, the kit and the
+handed-over equipment to CHECKED_OUT. Idempotent start, one live signature per
+type, no second document on a repeat. No migration was needed.
 
-**Test:** kill the browser mid-wizard and resume; confirm a completed handover
-cannot be edited; confirm two tablets editing one inspection get a conflict
-dialog rather than silent overwrite.
+**Test:** an external editor with no account signs on the engineer's tablet
+and the kit leaves as CHECKED_OUT with a frozen, signed document; a second
+submit changes nothing. Automated (14 tests), including a kit with no
+equipment, which is refused.
 
 ---
 

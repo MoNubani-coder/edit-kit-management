@@ -39,6 +39,7 @@ import {
   type OverlappingBooking,
 } from '@/server/dal/bookings.dal'
 import { searchActiveEditors } from '@/server/dal/editors.dal'
+import { getHandoverSummary, type HandoverSummary } from '@/server/dal/handover.dal'
 import { getKitAvailabilityFacts, getKitDetail, type KitCandidate, type KitDetail, searchKitCandidates } from '@/server/dal/kits.dal'
 import { prisma, type Db } from '@/server/db/prisma'
 import { recordAudit } from '@/server/services/audit.service'
@@ -543,16 +544,21 @@ export interface BookingWorkspace {
   canReadKit: boolean
   canReadEditor: boolean
   canReadAssets: boolean
+  /** The actor may open the handover workspace for a READY_FOR_HANDOVER booking. */
+  canHandover: boolean
+  /** The handover inspection on record, once one has been started or completed. */
+  handover: HandoverSummary | null
 }
 
 export async function loadBookingWorkspace(db: Db, actor: Actor, id: string, now: Date = new Date()): Promise<BookingWorkspace | null> {
   const booking = await getBookingDetailForActor(db, actor, id)
   if (!booking) return null
 
-  const [facts, kit, activity] = await Promise.all([
+  const [facts, kit, activity, handover] = await Promise.all([
     getKitAvailabilityFacts(db, booking.kit.id),
     getKitDetail(db, booking.kit.id, { includeIssues: false }),
     getBookingActivity(db, id),
+    getHandoverSummary(db, id),
   ])
 
   const manage = can(actor, 'booking.update')
@@ -575,6 +581,8 @@ export async function loadBookingWorkspace(db: Db, actor: Actor, id: string, now
     canReadKit: can(actor, 'kit.read'),
     canReadEditor: can(actor, 'editor.read'),
     canReadAssets: can(actor, 'asset.read'),
+    canHandover: can(actor, 'handover.perform') && booking.status === BookingStatus.READY_FOR_HANDOVER,
+    handover,
   }
 }
 

@@ -1,4 +1,4 @@
-import { Boxes, Pencil, UserRound } from 'lucide-react'
+import { Boxes, ClipboardCheck, Pencil, UserRound } from 'lucide-react'
 import Link from 'next/link'
 import type { ReactNode } from 'react'
 
@@ -7,6 +7,7 @@ import { Alert } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { buttonVariants } from '@/components/ui/button'
 import { KitAvailabilityBadge } from '@/features/kits/components/availability-badge'
+import { HandoverSummaryPanel } from '@/features/handover/components/handover-summary'
 import { AvailabilityNotice } from '@/features/kits/components/availability-notice'
 import { BOOKING_STATUS_LABELS } from '@/lib/booking-rules'
 import { formatDateTime } from '@/lib/datetime'
@@ -45,7 +46,7 @@ const Empty = () => <span className="text-subtle">—</span>
 const NEXT_STEP: Record<string, string> = {
   DRAFT: 'A draft holds nothing. Reserve the kit to hold it for this window.',
   RESERVED: 'The kit is held for this window. Mark it ready once it has been prepared for the editor.',
-  READY_FOR_HANDOVER: 'The kit is set aside. The handover inspection and signatures arrive with Phase 8.',
+  READY_FOR_HANDOVER: 'The kit is set aside. Open the handover to verify the equipment, collect both signatures and hand it over.',
   CHECKED_OUT: 'The kit is out with the editor.',
   OVERDUE: 'The kit is out and past its expected return.',
   RETURN_INSPECTION: 'The kit is being inspected on return.',
@@ -58,7 +59,7 @@ export function BookingOverview({ workspace, timeZone, now }: { workspace: Booki
   const { booking, time, readiness, kitNow, canReadKit, canReadEditor } = workspace
   const editor = booking.editor
   const kit = booking.kit
-  const anyAction = workspace.canReserve || workspace.canReturnToDraft || workspace.canMarkReady || workspace.canRevertReady || workspace.canCancel || workspace.canUpdate
+  const anyAction = workspace.canReserve || workspace.canReturnToDraft || workspace.canMarkReady || workspace.canRevertReady || workspace.canCancel || workspace.canUpdate || workspace.canHandover
 
   return (
     <div className="space-y-6">
@@ -182,7 +183,9 @@ export function BookingOverview({ workspace, timeZone, now }: { workspace: Booki
         </Panel>
       </div>
 
-      {readiness && !readiness.available && booking.status !== 'CANCELLED' && booking.status !== 'COMPLETED' ? <AvailabilityNotice availability={readiness} /> : null}
+      {workspace.handover ? <HandoverSummaryPanel summary={workspace.handover} collectionDate={booking.collectionDate} timeZone={timeZone} /> : null}
+
+      {readiness && !readiness.available && booking.status !== 'CANCELLED' && booking.status !== 'COMPLETED' && booking.status !== 'CHECKED_OUT' ? <AvailabilityNotice availability={readiness} /> : null}
 
       {booking.notes ? (
         <Panel title="Notes">
@@ -198,6 +201,12 @@ export function BookingOverview({ workspace, timeZone, now }: { workspace: Booki
           </header>
           <div className="grid gap-6 p-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
             <div className="flex flex-wrap items-start gap-3">
+              {workspace.canHandover ? (
+                <Link href={`/bookings/${booking.id}/handover`} className={buttonVariants({ variant: 'primary', size: 'sm' })}>
+                  <ClipboardCheck aria-hidden className="h-4 w-4" />
+                  {workspace.handover ? 'Continue handover' : 'Start handover'}
+                </Link>
+              ) : null}
               {workspace.canReserve ? <TransitionForm bookingId={booking.id} transition="reserve" /> : null}
               {workspace.canMarkReady ? <TransitionForm bookingId={booking.id} transition="ready" /> : null}
               {workspace.canRevertReady ? <TransitionForm bookingId={booking.id} transition="revert" /> : null}
@@ -208,7 +217,7 @@ export function BookingOverview({ workspace, timeZone, now }: { workspace: Booki
                   {workspace.editScope === 'restricted' ? 'Edit engineer and notes' : 'Edit booking'}
                 </Link>
               ) : null}
-              {booking.status === 'READY_FOR_HANDOVER' ? <p className="w-full text-xs text-muted">Handover inspection and signatures arrive with Phase 8.</p> : null}
+              {booking.status === 'READY_FOR_HANDOVER' && !workspace.canHandover ? <p className="w-full text-xs text-muted">The handover is performed by an engineer or administrator.</p> : null}
             </div>
             {workspace.canCancel ? (
               <div className="rounded-lg border border-line bg-panel-header/50 p-4">

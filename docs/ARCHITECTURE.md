@@ -1,6 +1,6 @@
 # Edit Kit Management System — Architecture
 
-**Status:** Phase 7 (booking management) — complete. Phases 1–6 — complete.
+**Status:** Phase 8 (handover / collection) — complete. Phases 1–7 — complete.
 **Last updated:** 2026-09-05
 
 ---
@@ -670,6 +670,26 @@ half-open, [start, end): a booking that ends at 12:00 and one that starts at
 12:00 on the same kit are adjacent and both allowed; the return inspection of
 the first is what physically frees the kit for the second.
 
+### AD-20 — A signature is an image plus a server-decided signer
+
+**Decision.** The signature pad sends one thing: a PNG. The server attributes
+it - the editor signature to the booking's `EditorProfile`, the engineer
+signature to the authenticated actor - snapshots the signer's name and staff
+id, stores the image as a file under the configured store with its SHA-256 on
+the row, and never updates a signature row: a new signature voids the old one.
+
+**Why.** An external editor has no account and signs on someone else's device,
+so nothing the client sends can prove who they are; the booking already says.
+Trusting a posted editor or user id would let one form field re-attribute a
+signature. Files rather than database payloads keep the rows small and let the
+storage provider change (AD-4); the hash lets a regenerated document prove the
+image is the one that was signed (AD-6).
+
+**Consequence.** Signature paths and hashes stay inside the DAL; pages see
+who and when. Re-signing is an audited void plus insert, so the one-live-
+signature index and the immutability trigger both hold, and the frozen
+`documentSnapshot` carries the hashes of exactly the two signatures that
+completed the handover.
 ### AD-21 — Only proof ends a session, and the gate never asserts one
 
 **Decision.** Two rules, together. The request gate decides with the cookie
@@ -765,6 +785,8 @@ edit-kit-management/
 │  │  ├─ bookings/                        # Phase 7: hrefs.ts + components (toolbar, table, time badge, schedule
 │  │  │                                   #   block, editor picker, kit picker, form, action forms, overview,
 │  │  │                                   #   equipment, activity)
+│  │  ├─ handover/                        # Phase 8: step card, identity panels, equipment form, checklist form,
+│  │  │                                   #   signature pad (canvas), start / complete forms, summary
 │  │  ├─ admin/components/                # admin-tabs, category-form, category-active-toggle
 │  │  ├─ bookings/  kits/  assets/  editors/  issues/
 │  │  ├─ inspections/               # the wizard lives here
@@ -787,9 +809,9 @@ edit-kit-management/
 │  │  │  ├─ route-policy.ts         #   public / authenticated / permission per path
 │  │  │  ├─ rate-limit.ts           #   LoginRateLimiter seam + in-memory default
 │  │  │  └─ errors.ts               #   UnauthorizedError / ForbiddenError
-│  │  ├─ dal/                       # authorised reads (bookings, dashboard, assets, catalogue, kits, editors)
+│  │  ├─ dal/                       # authorised reads (bookings, dashboard, assets, catalogue, kits, editors, handover)
 │  │  ├─ actions/                   # server actions (auth, admin-users, assets, accessories, categories,
-│  │  │                             #   kits, kit-composition, editors, bookings)
+│  │  │                             #   kits, kit-composition, editors, bookings, handover)
 │  │  ├─ services/                  # business logic, transaction-aware
 │  │  │  ├─ dashboard.service.ts    # Phase 3: buildDashboard (permission-gated assembly)
 │  │  │  ├─ assets.service.ts       # Phase 4: lifecycle rules, create/update/remove, accessories
@@ -797,6 +819,7 @@ edit-kit-management/
 │  │  │  ├─ kits.service.ts         # Phase 5: kit lifecycle, assignment rules, availability, composition
 │  │  │  ├─ editors.service.ts      # Phase 6: editor lifecycle, account linking, deactivation, picker
 │  │  │  ├─ bookings.service.ts     # Phase 7: reservation gate, explicit transitions, edit, cancellation
+│  │  │  ├─ handover.service.ts     # Phase 8: eligibility, snapshot, verification, signatures, atomic completion
 │  │  │  ├─ errors.ts               # DomainError + unique-violation mapping
 │  │  │  ├─ booking.service.ts
 │  │  │  ├─ handover.service.ts
@@ -807,7 +830,7 @@ edit-kit-management/
 │  │  │  └─ numbering.service.ts
 │  │  ├─ reports/                   # report definitions + renderers
 │  │  ├─ pdf/                       # document renderer
-│  │  └─ storage/                   # LocalDriver, (AzureBlobDriver later)
+│  │  └─ storage/                   # Phase 8: signature-store (local files + in-memory for tests); Azure later
 │  │
 │  ├─ lib/
 │  │  ├─ env.ts                     # zod-validated environment
@@ -1970,3 +1993,186 @@ reserve, a direct insert of 08:00–10:00 passes the constraint itself, and
 11:00–13:00 is refused by the service and, bypassing it, by the database.
 The Phase 2 scope suite still passes unchanged. 237 tests in 25 files pass;
 the database and every numbering counter are unchanged after two runs.
+
+---
+
+## 17. Handover (Phase 8)
+
+### 17.1 Shape
+
+The handover lives at `/bookings/[id]/handover` on the top-navigation shell,
+reached from the booking workspace's "Start handover" / "Continue handover"
+action, which appears only for a READY_FOR_HANDOVER booking and an actor with
+`handover.perform`. The page is a sequence: identities (booking, editor, kit),
+then four numbered stages - equipment, checklist and software, signatures,
+review and complete. Layers follow the earlier phases:
+`server/dal/handover.dal.ts` (reads with explicit selects; signature rows
+leave without path or hash), `server/services/handover.service.ts` (rules,
+snapshot, verification, signatures, completion), `server/actions/handover.actions.ts`
+(`action()`-wrapped; `handover.perform` for start, verify and sign,
+`handover.complete` for the final step), `server/storage/signature-store.ts`
+(signature files), `features/handover/` (UI). The forms post ids and answers;
+every fact is re-read on the server.
+
+### 17.2 Eligibility
+
+`bookingHandoverBlockers` (pure) answers "can this booking be handed over at
+all": the booking must be READY_FOR_HANDOVER; the editor must exist, be
+active and not removed; the kit must exist and be set aside for this booking
+(`Kit.status = RESERVED`, which `markReadyForHandover` set in Phase 7); and
+the kit must be structurally ready by the Phase 5 rule
+(`evaluateKitReadinessForBooking` - required members available, no
+maintenance in progress or on hold, nothing removed or retired). Optional
+members only warn.
+
+A kit carrying no equipment is refused as well. It passes the readiness rule
+trivially - no required member can be missing when there are none - but a
+handover exists to verify equipment, and a signed document listing none proves
+nothing. `verificationVerdict` repeats the check on the inspection's own lines,
+so an empty document cannot be completed either. The same function runs when the handover starts, when the
+page renders and again inside the completing transaction, so readiness that
+drifted after the reservation blocks completion with the exact reasons.
+
+### 17.3 The handover document: one inspection, snapshot lines
+
+Starting the handover creates one `Inspection` of type HANDOVER and copies
+what the kit contains *at that moment* into rows that belong to the inspection:
+
+| Snapshot | Rows | Source |
+|---|---|---|
+| Equipment | `AssetInspection` (code, name, category, make, model, serial, barcode, slot; `kitAssetId`) | active `KitAsset` members |
+| Accessories | `AccessoryInspection` (label, type, serial, barcode, expected quantity) | the asset's live accessories |
+| Software | `SoftwareCheck` (name, version, vendor) | `KitSoftware` |
+| Checklist | `BookingChecklistItem` (label, description, phase, required, order; `sourceTemplateItemId`) | the kit's template, else the system default |
+
+The checklist copy is the one Phase 7 deferred: it is written once per booking
+(guarded by an existence check inside the same transaction that creates the
+inspection) and `ChecklistResult` rows are created only when answers are
+saved, one per item per inspection (`@@unique([inspectionId,
+bookingChecklistItemId])`). Reloading or pressing Start again never copies
+again: the partial unique index `inspections_one_live_per_booking_and_type`
+keeps one live handover per booking, and a racing second Start reuses the row
+the index kept. A later template edit changes nothing here - the tests edit the
+template after the snapshot and read the booking's item unchanged.
+
+### 17.4 Software decision
+
+Software verification is snapshotted at handover start in the same spirit as
+the checklist: one `SoftwareCheck` row per `KitSoftware` entry with the name,
+version and vendor frozen. The engineer records INSTALLED, NOT_INSTALLED,
+LICENSE_ISSUE, NEEDS_UPDATE or NOT_APPLICABLE plus the installed version;
+required applications must be INSTALLED or NOT_APPLICABLE to complete,
+optional ones only warn. Whether an application is required is read from the
+kit's current `KitSoftware` row at display time (the schema has no
+`isRequired` on `SoftwareCheck`); a kit-software row removed mid-handover
+therefore reads as required, which errs on the safe side. No new column was
+added.
+
+### 17.5 Equipment and accessories
+
+The equipment stage lists the snapshot lines grouped by category with code,
+name, make and model, serial and barcode, slot, and required or optional;
+each accessory sits under its asset with expected and received quantity. The
+engineer records each line's condition - handed over, missing, damaged, not
+applicable - and the case condition. A required item not handed over, one
+that has since left the kit or entered maintenance, blocks completion; an
+optional item or accessory in trouble is noted, not blocking. Accessory rows
+belong to the asset; nothing is duplicated into the kit. Nothing in this stage
+is MacBook-specific: categories, labels and counts come from the data.
+
+### 17.6 Signatures (AD-20)
+
+Both parties sign on the engineer's device. `SignaturePad` is a `<canvas>`
+driven by Pointer Events - mouse, finger and stylus - drawn as dark ink on
+white so the stored PNG reads the same in either theme, with clear and
+"sign again". The form sends only the PNG data URL; the server decides who
+signed: the editor signature is attributed to the booking's `EditorProfile`
+(`signerEditorProfileId`, name and staff id snapshotted), the engineer
+signature to the authenticated actor (`signerUserId`, plus their
+`EngineerProfile` when they have one). No id in the request can change that.
+The image is validated (PNG magic bytes, ≤ 256 KB) and written to the
+signature store; the row records provider, relative path, SHA-256, signed-at,
+IP and user agent. Rows are never edited (the Phase 1 trigger forbids it);
+re-signing voids the previous row (`voidedAt`, reason "Re-signed") and inserts
+a new one, so `signatures_one_live_per_inspection_and_type` holds. Signature
+paths and hashes never leave the DAL to a page; serving the images is a later,
+authorised route.
+
+**Storage.** `signature-store.ts` follows AD-4: `localSignatureStore` writes
+under `STORAGE_LOCAL_PATH/signatures/<booking>/…png` (gitignored `/storage`),
+the provider is a column on the row, and the file is written before the row
+and removed if the row cannot be written. Tests use `memorySignatureStore`,
+so a rolled-back transaction leaves no file.
+
+### 17.7 Collection time and completion (AD-8 in practice)
+
+`completeHandover` is one Serializable transaction:
+
+1. `SELECT … FOR UPDATE` on the booking row - a concurrent completion waits
+   here and then reads CHECKED_OUT;
+2. re-read the booking; CHECKED_OUT answers "already been handed over", anything
+   but READY_FOR_HANDOVER is refused;
+3. re-run `bookingHandoverBlockers` (editor, kit set aside, readiness) and
+   `verificationVerdict` (required lines, checklist, software, both signatures);
+4. freeze the inspection: COMPLETED, `completedAt`, `completedById`,
+   `lockedAt`, `documentSnapshot` (booking, editor, kit, engineer, every line
+   and answer, both signatures with hashes) - the immutability trigger takes
+   over from here;
+5. the booking: CHECKED_OUT, `collectionDate = now()` from the server clock,
+   `expectedReturnDate` untouched;
+6. the kit: CHECKED_OUT; each handed-over asset: CHECKED_OUT with an
+   `AssetStatusLog` row pointing at the booking; an item recorded missing or
+   damaged takes that status instead;
+7. audit: HANDOVER_COMPLETED, BOOKING_STATUS_CHANGED, KIT_STATUS_CHANGED.
+
+If any step throws, nothing is applied: the tests refuse a completion at the
+last moment and read the booking still READY_FOR_HANDOVER, the kit RESERVED,
+the inspection unlocked. A second submit, a second tab or a retry after
+success returns a sentence, writes no second document and no new signatures.
+No client-submitted time is ever used.
+
+### 17.8 Activity
+
+The booking timeline (Phase 7) now carries HANDOVER_STARTED, the equipment and
+checklist saves (UPDATE with a summary), SIGNATURE_SUBMITTED and
+SIGNATURE_VOIDED, HANDOVER_COMPLETED and the Ready for handover → Checked out
+status change, each with the actor. All values existed in `AuditAction`; no
+migration was needed for Phase 8.
+
+### 17.9 Permissions
+
+`handover.perform` and `handover.complete`: ADMIN and ENGINEER (unchanged
+matrix). VIEWER reads bookings and cannot open the handover page or call any
+action. EDITOR cannot perform the engineer workflow; external editors have no
+login and sign in person; an internal EDITOR keeps `booking.readOwn` and sees
+their booking as CHECKED_OUT with the handover summary afterwards.
+`kit.manage` stays ADMIN-only.
+
+### 17.10 Tests
+
+`tests/integration/handover.service.test.ts` (9, rolled back, in-memory
+signature store): snapshot of equipment, accessories, software and checklist
+with idempotent start; draft, reserved, cancelled and unknown bookings
+refused; inactive editor, kit not set aside, damaged required item and active
+maintenance refused while an optional damaged item only warns; verification
+enforcement (required item missing, unanswered and failed required checks,
+required software not installed, optional failures as warnings, each signature
+required); server-side signer identity, PNG validation, re-signing voids and
+keeps one live signature per type, no paths or hashes in reads; atomic
+completion (server collection time, expected return preserved, kit and assets
+checked out with status logs, frozen document, audit and ordered activity,
+repeat and late edits refused, template edits ignored, database trigger
+refusing a change to the frozen inspection); refused completion leaving the
+booking READY_FOR_HANDOVER; an internal editor with an account whose own
+booking view still reads after checkout. `tests/integration/handover.actions.test.ts`
+(5, one rolled-back transaction, store swapped for memory): anonymous, VIEWER
+and EDITOR refused; ENGINEER starts once however often the button is pressed;
+equipment and checklist saved from posted line fields and a bogus line id
+refused; both signatures with server identity, VIEWER refused, bad images and
+unknown roles refused; ADMIN completes once, repeat / VIEWER / EDITOR refused,
+no second document, booking workspace carries the summary without paths. A kit
+with no equipment is refused at the page, at the start and at the verdict, and
+writes no inspection, checklist item or number. 278 tests in 29 files pass; the
+database and counters are unchanged after two runs.
+
+---
