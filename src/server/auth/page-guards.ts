@@ -2,9 +2,10 @@ import 'server-only'
 
 import { forbidden, redirect } from 'next/navigation'
 
+import { ServiceUnavailableError } from './errors'
 import { canAny, type Permission } from './permissions'
 import { LOGIN_PATH } from './route-policy'
-import { type Actor, getCurrentUser } from './session'
+import { type Actor, resolveSession } from './session'
 
 /**
  * Page-layer guards for Server Components.
@@ -14,14 +15,20 @@ import { type Actor, getCurrentUser } from './session'
  * no session -> redirect to /login; session without permission -> 403 via
  * Next.js `forbidden()` and the nearest forbidden.tsx.
  *
+ * A session that could not be resolved because the database is unreachable is
+ * neither of those: it raises `ServiceUnavailableError` for the nearest
+ * error.tsx, which keeps the visitor's session intact and the failure bounded.
+ * Redirecting to /login here instead is what made the old loop possible.
+ *
  * Route handlers and server actions must not use these - see api.ts and
  * action.ts.
  */
 
 export async function requireAuthForPage(): Promise<Actor> {
-  const actor = await getCurrentUser()
-  if (!actor) redirect(LOGIN_PATH)
-  return actor
+  const resolution = await resolveSession()
+  if (resolution.status === 'unavailable') throw new ServiceUnavailableError()
+  if (resolution.status === 'anonymous') redirect(LOGIN_PATH)
+  return resolution.actor
 }
 
 export async function requirePermissionForPage(

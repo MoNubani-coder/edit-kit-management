@@ -10,6 +10,9 @@ import { sessionCookie } from '../helpers/session-cookie'
  * public routes pass, protected routes redirect anonymous visitors to /login
  * with a callbackUrl, admin routes answer 403 to non-admins, and tampered or
  * expired cookies count as anonymous.
+ *
+ * One thing it deliberately does *not* do is send a cookie holder from /login
+ * to the home page. See tests/integration/auth-redirect-loop.test.ts.
  */
 
 const ORIGIN = 'http://localhost:3000'
@@ -79,10 +82,12 @@ describe('proxy: authentication', () => {
     expect(response.headers.get('x-middleware-request-x-nonce')).toBeTruthy()
   })
 
-  it('a signed-in user visiting /login is sent to the dashboard', async () => {
+  it('/login is served to a cookie holder, because only the page can verify the session', async () => {
     const cookie = await sessionCookie({ sub: 'user_admin', role: 'ADMIN' })
-    const location = redirectLocation(await run('/login', cookie))
-    expect(location?.pathname).toBe('/dashboard')
+    const response = await run('/login', cookie)
+
+    expect(response.headers.get('location')).toBeNull()
+    expect(isPassThrough(response)).toBe(true)
   })
 
   it('/ dispatches by session state', async () => {

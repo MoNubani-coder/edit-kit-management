@@ -32,6 +32,26 @@ export class ForbiddenError extends Error {
   }
 }
 
+/**
+ * The session could not be resolved because the database was unreachable.
+ *
+ * Deliberately *not* an authorization error: it means "unknown", not "denied".
+ * Treating it as denied is what turned a database outage into a redirect loop,
+ * and it must never be a reason to clear somebody's session cookie.
+ */
+export class ServiceUnavailableError extends Error {
+  readonly status = 503 as const
+
+  constructor(message = 'The service is temporarily unavailable. Please try again in a moment.') {
+    super(message)
+    this.name = 'ServiceUnavailableError'
+  }
+}
+
+export function isServiceUnavailableError(error: unknown): error is ServiceUnavailableError {
+  return error instanceof ServiceUnavailableError
+}
+
 export type AuthorizationError = UnauthorizedError | ForbiddenError
 
 export function isAuthorizationError(error: unknown): error is AuthorizationError {

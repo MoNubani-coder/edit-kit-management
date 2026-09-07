@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation'
 
 import { LoginForm } from '@/features/auth/components/login-form'
 import { HOME_PATH, isSafeRedirectPath } from '@/server/auth/route-policy'
-import { getCurrentUser } from '@/server/auth/session'
+import { resolveSession } from '@/server/auth/session'
 
 export const metadata: Metadata = { title: 'Sign in' }
 
@@ -23,12 +23,24 @@ function noticeFor(error: string | undefined): string | undefined {
 }
 
 export default async function LoginPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
-  // The proxy already sends signed-in users home; this covers direct renders.
-  const actor = await getCurrentUser()
-  if (actor) redirect(HOME_PATH)
+  // This page decides who is signed in, because it is the first place in the
+  // request that can ask the database. The request gate only decodes the
+  // cookie, so it serves /login to everyone: a token the gate accepts but the
+  // database rejects arrives here and is given the form, which is what keeps
+  // the old /login <-> /dashboard loop impossible.
+  //
+  // An unresolved session (database unreachable) is not treated as signed in
+  // and not treated as a hard failure either: the form renders with a notice,
+  // so the page stays reachable during an outage.
+  const session = await resolveSession()
+  if (session.status === 'signed-in') redirect(HOME_PATH)
 
   const params = await searchParams
   const callbackUrl = first(params.callbackUrl)
+  const notice =
+    session.status === 'unavailable'
+      ? 'Sign-in is temporarily unavailable. Please try again in a moment.'
+      : noticeFor(first(params.error))
 
   return (
     <div className="w-full max-w-[26rem]">
@@ -41,7 +53,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
 
         <LoginForm
           callbackUrl={isSafeRedirectPath(callbackUrl) ? callbackUrl : undefined}
-          notice={noticeFor(first(params.error))}
+          notice={notice}
         />
       </div>
 

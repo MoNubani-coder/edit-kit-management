@@ -54,9 +54,26 @@ describe('route decisions', () => {
     expect(decideRoute('/api/health', null)).toEqual({ action: 'allow' })
   })
 
-  it('sends a signed-in visitor away from /login but leaves other public routes alone', () => {
-    expect(decideRoute('/login', { role: 'VIEWER' })).toEqual({ action: 'home' })
+  it('serves /login to a cookie-bearing visitor instead of bouncing them home', () => {
+    // The regression: this layer sees a decoded cookie, not the database. When
+    // it answered "home" here, a cookie the database rejected bounced between
+    // /login and /dashboard until the browser gave up. Deciding who is really
+    // signed in belongs to the login page.
+    for (const role of ['VIEWER', 'EDITOR', 'ENGINEER', 'ADMIN'] as const) {
+      expect(decideRoute('/login', { role }), role).toEqual({ action: 'allow' })
+    }
     expect(decideRoute('/api/health', { role: 'VIEWER' })).toEqual({ action: 'allow' })
+  })
+
+  it('never answers with a decision that redirects towards an authenticated route', () => {
+    // A cookie-only layer can safely refuse or allow; it cannot safely assert
+    // that somebody is signed in. Any future 'home'-style action would have to
+    // read the database first.
+    const decisions = ['/login', '/api/health', '/dashboard', '/admin/users', '/bookings'].flatMap((path) =>
+      [null, { role: 'ADMIN' } as const, { role: 'VIEWER' } as const].map((subject) => decideRoute(path, subject).action),
+    )
+    // Serve it, ask for a login, or refuse it. Nothing that assumes a session.
+    expect(new Set(decisions)).toEqual(new Set(['allow', 'login', 'forbidden']))
   })
 
   it('answers forbidden, not login, for an authenticated user without the admin permission', () => {

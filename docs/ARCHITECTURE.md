@@ -458,6 +458,11 @@ and the proxy is optimistic by design (§11.5). Suspending a user or resetting
 their password bumps `sessionVersion`, and their next request ends with a
 cleared cookie.
 
+A cleared cookie is reserved for that proof. When the database cannot be
+reached the callback keeps the token and the session survives the outage; see
+AD-21, which also explains why the proxy never redirects a cookie holder away
+from `/login`.
+
 ### AD-3 — All auth behind a facade
 
 Everything auth-related is confined to `src/server/auth/*`, and the rest of the
@@ -665,6 +670,33 @@ half-open, [start, end): a booking that ends at 12:00 and one that starts at
 12:00 on the same kit are adjacent and both allowed; the return inspection of
 the first is what physically frees the kit for the second.
 
+### AD-21 — Only proof ends a session, and the gate never asserts one
+
+**Decision.** Two rules, together. The request gate decides with the cookie
+alone, so it may refuse a request or serve it, but it must never redirect
+*towards* an authenticated route on the strength of a cookie: `/login` is
+always served, and the login page decides who is signed in through the same
+database-backed path the protected pages use. And a session read has three
+answers, not two - signed in, definitively anonymous, or unresolved - so an
+unreachable database is never mistaken for a sign-out.
+
+**Why.** The two layers disagreeing produced a redirect loop. The gate saw a
+decodable cookie and sent the visitor from `/login` to `/dashboard`; the page
+resolved the same cookie against the database, found the session revoked (or
+the database unreachable) and sent them back to `/login`. The browser gave up
+with ERR_TOO_MANY_REDIRECTS, and clearing site data was the only way in.
+
+**Consequence.** `revalidateToken` returns `null` - which is what makes Auth.js
+clear the cookie - only for a definitive answer: unknown, deleted, not ACTIVE,
+or a revoked `sessionVersion`. A failed read returns the token untouched, so an
+outage signs nobody out; nothing is authorised on that token alone, because
+`resolveSession()` still reads the account and answers "unavailable", which
+pages turn into a retryable error page, route handlers into JSON 503 and
+actions into a plain failure. A stale cookie now costs one redirect to a
+rendered login form. Regression cover lives in
+`tests/integration/auth-redirect-loop.test.ts`, which walks both layers the way
+a browser does, and `tests/integration/auth-outage.test.ts`, which pins the
+cookie-clearing condition.
 ## 6. Folder structure
 
 ```

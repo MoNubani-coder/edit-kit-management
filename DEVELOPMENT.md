@@ -9,6 +9,24 @@ Running log of what exists, what to test, and what comes next.
   numbering counters unchanged), typecheck + lint clean, production build clean
 - **Last updated:** 2026-09-05 (Phase 7)
 
+### Fix: the /login ↔ /dashboard redirect loop
+
+Signing in could end in ERR_TOO_MANY_REDIRECTS. The request gate reads only the
+session cookie, so a cookie the database rejects looked signed in there and was
+redirected from `/login` to `/dashboard`, while the page resolved the same
+cookie against the database and redirected back to `/login`. Two conditions
+triggered it: a revoked `sessionVersion` (the command-line password reset bumps
+it), and an unreachable database, which the session read treated as a
+sign-out.
+
+The gate no longer redirects a cookie holder away from `/login`; the login page
+is the authority, using the same database-backed path the protected pages use.
+A session read now answers signed in, anonymous or unresolved, and only a
+definitive answer ends a session or clears a cookie. An outage gives a bounded
+error page, JSON 503 or a retryable action failure, and leaves the session
+alone. Design in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) AD-21; regression
+cover in `tests/integration/auth-redirect-loop.test.ts` (19) and
+`tests/integration/auth-outage.test.ts` (7).
 Companion documents: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (design and
 rationale) · [docs/ROADMAP.md](docs/ROADMAP.md) (all 13 phases).
 

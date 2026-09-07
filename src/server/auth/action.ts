@@ -4,7 +4,7 @@ import type { z } from 'zod'
 
 import { DomainError } from '@/server/services/errors'
 
-import { isAuthorizationError } from './errors'
+import { isAuthorizationError, isServiceUnavailableError } from './errors'
 import type { Permission } from './permissions'
 import { type Actor, requireAuth, requirePermission } from './session'
 
@@ -83,6 +83,11 @@ export function action<Schema extends z.ZodType, Output>(
           error: error.status === 401 ? 'unauthorized' : 'forbidden',
           message: error.message,
         }
+      }
+      // The session could not be resolved. Report it as a plain, retryable
+      // failure; the actor keeps their session and no internals are exposed.
+      if (isServiceUnavailableError(error)) {
+        return { ok: false, error: 'error', message: error.message }
       }
       throw error
     }

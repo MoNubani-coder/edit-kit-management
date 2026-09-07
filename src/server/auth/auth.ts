@@ -62,14 +62,26 @@ const credentialsSchema = loginSchema.pick({ email: true, password: true })
 /**
  * Confirms the account behind a token is still allowed in. Returns the token
  * with fresh identity fields, or `null` to end the session.
+ *
+ * Returning `null` makes Auth.js clear the session cookie, so it is reserved
+ * for a definitive answer from the database: unknown, deleted, not ACTIVE, or a
+ * revoked session version. When the database cannot be reached the token is
+ * returned untouched - the session is not proven invalid, and signing everyone
+ * out over an outage would be both wrong and, before the login route was
+ * fixed, a redirect loop. Nothing is authorised on the strength of this token
+ * alone: `resolveSession()` still reads the account for every page, action and
+ * route handler, and answers "unavailable" while the outage lasts.
  */
 export async function revalidateToken(token: JWT): Promise<JWT | null> {
   if (!token.sub) return null
 
-  const user = await prisma.user.findUnique({
-    where: { id: token.sub },
-    select: { name: true, email: true, role: true, status: true, sessionVersion: true, deletedAt: true },
-  })
+  let user: Awaited<ReturnType<typeof readSessionUser>>
+  try {
+    user = await readSessionUser(token.sub)
+  } catch (error) {
+    console.error('[auth] session revalidation unavailable, keeping the token', error)
+    return token
+  }
 
   if (!user || user.deletedAt || user.status !== UserStatus.ACTIVE) return null
   if (user.sessionVersion !== token.sessionVersion) return null
@@ -81,6 +93,13 @@ export async function revalidateToken(token: JWT): Promise<JWT | null> {
   token.role = user.role
 
   return token
+}
+
+function readSessionUser(id: string) {
+  return prisma.user.findUnique({
+    where: { id },
+    select: { name: true, email: true, role: true, status: true, sessionVersion: true, deletedAt: true },
+  })
 }
 
 export const { handlers, auth, signIn, signOut } = NextAuth({

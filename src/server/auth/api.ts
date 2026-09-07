@@ -2,7 +2,7 @@ import 'server-only'
 
 import type { NextRequest } from 'next/server'
 
-import { isAuthorizationError } from './errors'
+import { isAuthorizationError, isServiceUnavailableError } from './errors'
 import type { Permission } from './permissions'
 import { type Actor, requireAuth, requirePermission } from './session'
 
@@ -29,6 +29,13 @@ export function unauthorizedResponse(): Response {
   )
 }
 
+export function serviceUnavailableResponse(): Response {
+  return Response.json(
+    { error: 'unavailable', message: 'The service is temporarily unavailable. Please try again in a moment.' },
+    { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '30' } },
+  )
+}
+
 export function forbiddenResponse(): Response {
   return Response.json(
     { error: 'forbidden', message: 'You do not have permission to access this resource.' },
@@ -52,6 +59,9 @@ export function withApiAuth(
       if (isAuthorizationError(error)) {
         return error.status === 401 ? unauthorizedResponse() : forbiddenResponse()
       }
+      // "Cannot tell who you are" is not "you are not allowed": answer 503 so
+      // the caller retries instead of treating it as a sign-out.
+      if (isServiceUnavailableError(error)) return serviceUnavailableResponse()
       throw error
     }
 

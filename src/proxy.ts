@@ -15,6 +15,12 @@ import { decideRoute, HOME_PATH, LOGIN_PATH } from '@/server/auth/route-policy'
  * Server Functions are POSTs to their page route, so a matcher gap here never
  * removes a security control.
  *
+ * Because this layer cannot see the database, it never redirects *towards* an
+ * authenticated route on the strength of a cookie alone - /login is always
+ * served. The one exception is the root dispatcher below, whose target
+ * (/dashboard) re-checks against the database and lands on /login if the
+ * session is stale, which terminates after a single hop.
+ *
  * Runs on the Node.js runtime (Next.js 16 default for proxy.ts).
  */
 
@@ -85,9 +91,6 @@ export default auth((request) => {
       loginUrl.searchParams.set('callbackUrl', `${pathname}${search}`)
       return withSecurityHeaders(NextResponse.redirect(loginUrl), csp)
     }
-
-    case 'home':
-      return withSecurityHeaders(NextResponse.redirect(new URL(HOME_PATH, request.url)), csp)
 
     case 'forbidden': {
       if (isApiRoute) {

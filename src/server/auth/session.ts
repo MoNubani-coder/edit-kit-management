@@ -6,7 +6,7 @@ import { cache } from 'react'
 import { prisma } from '@/server/db/prisma'
 
 import { auth } from './auth'
-import { ForbiddenError, UnauthorizedError } from './errors'
+import { ForbiddenError, ServiceUnavailableError, UnauthorizedError } from './errors'
 import { canAny, type Permission } from './permissions'
 
 /**
@@ -47,19 +47,42 @@ const actorSelect = {
 } as const
 
 /**
- * The current actor, or `null` when there is no valid session.
+ * What a session read can conclude.
  *
- * Memoised per request with React `cache`, so a layout, a page and a handful
- * of components asking the same question cost one session decode and one
- * primary-key lookup.
+ * `anonymous` is a *definitive* answer from the database: no such account, it
+ * was deleted, it is not ACTIVE, or the session was revoked. `unavailable`
+ * means the database could not be reached, so the session is neither valid nor
+ * proven invalid. Keeping the two apart is what stops an outage from behaving
+ * like a sign-out, and it is why an outage never clears a cookie.
  */
-export const getCurrentUser = cache(async (): Promise<Actor | null> => {
+export type SessionResolution =
+  | { status: 'signed-in'; actor: Actor }
+  | { status: 'anonymous' }
+  | { status: 'unavailable' }
+
+/**
+ * Resolves the caller once per request.
+ *
+ * Memoised with React `cache`, so a layout, a page and a handful of components
+ * asking the same question cost one session decode and one primary-key lookup.
+ */
+export const resolveSession = cache(async (): Promise<SessionResolution> => {
   const session = await auth()
   const userId = session?.user?.id
-  if (!userId) return null
+  if (!userId) return { status: 'anonymous' }
 
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: actorSelect })
-  if (!user || user.deletedAt || user.status !== UserStatus.ACTIVE) return null
+  let user: Awaited<ReturnType<typeof readActorRow>>
+  try {
+    user = await readActorRow(userId)
+  } catch (error) {
+    // The account is probably fine; we cannot tell right now. Nothing is
+    // authorised without a successful read, so failing "unknown" grants no
+    // access - it only avoids pretending the visitor signed out.
+    console.error('[auth] session could not be resolved', error)
+    return { status: 'unavailable' }
+  }
+
+  if (!user || user.deletedAt || user.status !== UserStatus.ACTIVE) return { status: 'anonymous' }
 
   const editorProfile =
     user.editorProfile && !user.editorProfile.deletedAt && user.editorProfile.isActive
@@ -71,20 +94,43 @@ export const getCurrentUser = cache(async (): Promise<Actor | null> => {
       : null
 
   return {
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    role: user.role,
-    editorProfileId: editorProfile?.id ?? null,
-    engineerProfileId: engineerProfile?.id ?? null,
+    status: 'signed-in',
+    actor: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      editorProfileId: editorProfile?.id ?? null,
+      engineerProfileId: engineerProfile?.id ?? null,
+    },
   }
 })
 
-/** Throws `UnauthorizedError` when nobody is signed in. */
+function readActorRow(userId: string) {
+  return prisma.user.findUnique({ where: { id: userId }, select: actorSelect })
+}
+
+/**
+ * The current actor, or `null` when there is no valid session.
+ *
+ * Callers that must tell an outage from a sign-out use `resolveSession()`;
+ * this shorthand deliberately collapses both to `null` and is only for the
+ * places where that is the right answer (the root dispatcher, signing out).
+ */
+export const getCurrentUser = cache(async (): Promise<Actor | null> => {
+  const resolution = await resolveSession()
+  return resolution.status === 'signed-in' ? resolution.actor : null
+})
+
+/**
+ * Throws `UnauthorizedError` when nobody is signed in, or
+ * `ServiceUnavailableError` when the session could not be resolved at all.
+ */
 export async function requireAuth(): Promise<Actor> {
-  const actor = await getCurrentUser()
-  if (!actor) throw new UnauthorizedError()
-  return actor
+  const resolution = await resolveSession()
+  if (resolution.status === 'unavailable') throw new ServiceUnavailableError()
+  if (resolution.status === 'anonymous') throw new UnauthorizedError()
+  return resolution.actor
 }
 
 /** Alias for readers who prefer the longer name. */
