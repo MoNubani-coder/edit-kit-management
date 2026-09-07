@@ -2,7 +2,7 @@ import 'server-only'
 
 import { can } from '@/server/auth/permissions'
 import type { Actor } from '@/server/auth/session'
-import { getFileBookingScope, getPhotoFileInternal, getSignatureFileInternal, type StoredFileRecord } from '@/server/dal/attachments.dal'
+import { getFileBookingScope, getIssuePhotoFileInternal, getPhotoFileInternal, getSignatureFileInternal, type StoredFileRecord } from '@/server/dal/attachments.dal'
 import type { Db } from '@/server/db/prisma'
 import { readStoredFile } from '@/server/storage/photo-store'
 
@@ -26,7 +26,7 @@ import { readStoredFile } from '@/server/storage/photo-store'
  * signature is captured in person on the engineer's device (AD-20).
  */
 
-export type FileKind = 'signature' | 'photo'
+export type FileKind = 'signature' | 'photo' | 'issue-photo'
 
 export type FileResult =
   | { status: 'ok'; fileName: string; mimeType: string; bytes: Buffer }
@@ -45,7 +45,9 @@ export async function canReadBookingFiles(db: Db, actor: Actor, bookingId: strin
 }
 
 async function record(db: Db, kind: FileKind, id: string): Promise<StoredFileRecord | null> {
-  return kind === 'signature' ? getSignatureFileInternal(db, id) : getPhotoFileInternal(db, id)
+  if (kind === 'signature') return getSignatureFileInternal(db, id)
+  if (kind === 'issue-photo') return getIssuePhotoFileInternal(db, id)
+  return getPhotoFileInternal(db, id)
 }
 
 /**
@@ -58,7 +60,16 @@ export async function loadAuthorisedFile(db: Db, actor: Actor, kind: FileKind, i
   // far as the caller is concerned; distinguishing them would confirm that a
   // particular id exists.
   if (!row) return { status: 'not-found' }
-  if (!(await canReadBookingFiles(db, actor, row.bookingId))) return { status: 'forbidden' }
+
+  // An issue photo is an equipment record rather than a booking record: it may
+  // have no booking at all (a fault noticed on the shelf), so `issue.read`
+  // decides. When it *did* come from a return, the booking rule still lets the
+  // booking's own reader see it.
+  const allowed =
+    kind === 'issue-photo'
+      ? can(actor, 'issue.read') || (await canReadBookingFiles(db, actor, row.bookingId))
+      : await canReadBookingFiles(db, actor, row.bookingId)
+  if (!allowed) return { status: 'forbidden' }
 
   const stored = await readStoredFile(row.storagePath)
   if (!stored) return { status: 'gone' }

@@ -19,7 +19,7 @@ import { type FileKind, loadAuthorisedFile } from '@/server/services/files.servi
  * file lives.
  */
 
-const KINDS = new Set<FileKind>(['signature', 'photo'])
+const KINDS = new Set<FileKind>(['signature', 'photo', 'issue-photo'])
 
 function notFound(): Response {
   return Response.json({ error: 'not_found', message: 'File not found.' }, { status: 404, headers: { 'Cache-Control': 'no-store' } })

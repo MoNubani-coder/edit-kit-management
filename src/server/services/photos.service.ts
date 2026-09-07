@@ -1,9 +1,9 @@
 import 'server-only'
 
-import { AttachmentKind, AuditAction, InspectionStatus, InspectionType } from '@prisma/client'
+import { AttachmentKind, AuditAction, InspectionStatus, InspectionType, IssueStatus } from '@prisma/client'
 
 import type { Actor } from '@/server/auth/session'
-import { countInspectionPhotos, getInspectionPhotos, type PhotoMeta } from '@/server/dal/attachments.dal'
+import { countInspectionPhotos, countIssuePhotos, getInspectionPhotos, getIssuePhotos, type PhotoMeta } from '@/server/dal/attachments.dal'
 import type { Db } from '@/server/db/prisma'
 import { recordAudit } from '@/server/services/audit.service'
 import { DomainError } from '@/server/services/errors'
@@ -116,4 +116,82 @@ export async function addInspectionPhoto(
 
 export async function loadInspectionPhotos(db: Db, inspectionId: string): Promise<PhotoMeta[]> {
   return getInspectionPhotos(db, inspectionId)
+}
+
+/**
+ * Stores one photo against an issue: the damage itself, a serial plate, the
+ * empty slot in the case.
+ *
+ * Same rules as inspection evidence - the bytes decide the type, the server
+ * names the file, the row is written after the file and the file is removed
+ * again if the row fails. Accepted only while the issue is still live: a
+ * closed issue is a record.
+ */
+export async function addIssuePhoto(
+  db: Db,
+  actor: Actor,
+  input: { issueId: string; file: unknown; caption?: string },
+  store: PhotoStore,
+): Promise<UploadedPhoto> {
+  const issue = await db.issue.findUnique({ where: { id: input.issueId }, select: { id: true, issueNumber: true, status: true, bookingId: true } })
+  if (!issue) throw new DomainError('not_found', 'Issue not found.')
+  if (issue.status === IssueStatus.CLOSED) {
+    throw new DomainError('lifecycle', `${issue.issueNumber} is closed; reopen it before adding evidence.`)
+  }
+
+  const existing = await countIssuePhotos(db, issue.id)
+  if (existing >= PHOTO_LIMIT_PER_INSPECTION) {
+    throw new DomainError('validation', `That issue already has ${PHOTO_LIMIT_PER_INSPECTION} photos, which is the limit.`)
+  }
+
+  let upload
+  try {
+    upload = await readPhotoUpload(input.file)
+  } catch (error) {
+    if (error instanceof PhotoUploadError) throw new DomainError('validation', error.message, { photo: error.message })
+    throw error
+  }
+
+  const stored = await store.save({ bookingId: issue.bookingId ?? issue.id, scope: 'issue', mimeType: upload.mimeType, bytes: upload.bytes })
+
+  try {
+    const attachment = await db.attachment.create({
+      data: {
+        kind: AttachmentKind.ISSUE_PHOTO,
+        fileName: upload.displayName,
+        mimeType: upload.mimeType,
+        sizeBytes: upload.sizeBytes,
+        sha256: upload.hash,
+        storageProvider: stored.provider,
+        storagePath: stored.path,
+        caption: input.caption?.trim() ? input.caption.trim() : null,
+        issueId: issue.id,
+        // Keep the booking link when the issue came from a return, so the
+        // booking's own file authorisation still recognises it.
+        bookingId: issue.bookingId,
+        uploadedById: actor.id,
+      },
+      select: { id: true, fileName: true },
+    })
+
+    await recordAudit(db, {
+      action: AuditAction.FILE_UPLOADED,
+      entityType: 'Issue',
+      entityId: issue.id,
+      actorUserId: actor.id,
+      actorName: actor.name,
+      actorRole: actor.role,
+      summary: `${issue.issueNumber} photo added by ${actor.name} (${Math.round(upload.sizeBytes / 1024)} KB)`,
+      metadata: { attachmentId: attachment.id, detail: 'Photo added' },
+    })
+
+    return attachment
+  } catch (error) {
+    await store.remove(stored.path)
+    throw error
+  }
+}
+
+export async function loadIssuePhotos(db: Db, issueId: string): Promise<PhotoMeta[]> {
+  return getIssuePhotos(db, issueId)
 }

@@ -86,6 +86,20 @@ export async function getBookingPhotos(db: Db, bookingId: string): Promise<Photo
   return rows.map(toMeta)
 }
 
+/** Photos attached to one issue, oldest first. */
+export async function getIssuePhotos(db: Db, issueId: string): Promise<PhotoMeta[]> {
+  const rows = await db.attachment.findMany({
+    where: { issueId, kind: AttachmentKind.ISSUE_PHOTO, deletedAt: null },
+    orderBy: [{ createdAt: 'asc' }],
+    select: photoSelect,
+  })
+  return rows.map(toMeta)
+}
+
+export async function countIssuePhotos(db: Db, issueId: string): Promise<number> {
+  return db.attachment.count({ where: { issueId, kind: AttachmentKind.ISSUE_PHOTO, deletedAt: null } })
+}
+
 export async function countInspectionPhotos(db: Db, inspectionId: string): Promise<number> {
   return db.attachment.count({ where: { inspectionId, kind: AttachmentKind.INSPECTION_PHOTO, deletedAt: null } })
 }
@@ -97,6 +111,8 @@ export async function countInspectionPhotos(db: Db, inspectionId: string): Promi
 export interface StoredFileRecord {
   id: string
   bookingId: string | null
+  /** Set for an issue photo; authorisation then follows `issue.read`. */
+  issueId?: string | null
   fileName: string
   mimeType: string
   storageProvider: StorageProvider
@@ -108,6 +124,15 @@ export async function getPhotoFileInternal(db: Db, id: string): Promise<StoredFi
   const row = await db.attachment.findFirst({
     where: { id, kind: AttachmentKind.INSPECTION_PHOTO, deletedAt: null },
     select: { id: true, bookingId: true, fileName: true, mimeType: true, storageProvider: true, storagePath: true },
+  })
+  return row
+}
+
+/** One issue photo with its storage details, for the file route to read. */
+export async function getIssuePhotoFileInternal(db: Db, id: string): Promise<StoredFileRecord | null> {
+  const row = await db.attachment.findFirst({
+    where: { id, kind: AttachmentKind.ISSUE_PHOTO, deletedAt: null },
+    select: { id: true, bookingId: true, issueId: true, fileName: true, mimeType: true, storageProvider: true, storagePath: true },
   })
   return row
 }

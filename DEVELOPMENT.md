@@ -2,12 +2,12 @@
 
 Running log of what exists, what to test, and what comes next.
 
-- **Current phase:** 10 of 13 — Kit labels, photo evidence and file access — ✅ **complete**
+- **Current phase:** 11 of 13 — Issue management — ✅ **complete**
 - **Status:** verified against PostgreSQL 16.15 — six migrations applied (none
-  new in Phases 8–10), zero drift, 29/29 database constraint checks, 347/347
+  new in Phases 8–11), zero drift, 29/29 database constraint checks, 372/372
   Vitest tests (two consecutive runs, database, filesystem and numbering
   counters unchanged), typecheck + lint clean, production build clean
-- **Last updated:** 2026-09-07 (Phase 10)
+- **Last updated:** 2026-09-07 (Phase 11)
 
 ### Fix: the /login ↔ /dashboard redirect loop
 
@@ -1531,21 +1531,138 @@ refused before any database read; a real row with a missing file answering
 
 ---
 
-## Next: Phase 11 — Issues and maintenance
+## Phase 11 — Issue management (complete)
 
-Phase 9 raises issues and Phase 10 lets evidence be attached to inspections;
-Phase 11 works the issues: an issues list and detail with assignment, severity
-and status transitions (OPEN → UNDER_INVESTIGATION → RESOLVED → CLOSED),
-maintenance records opened from an issue, the asset and kit returning to
-service when the work is done, issue photos through the same file route, and
-the dashboard counts that go with it. The models, audit actions and `MNT-`
-numbering are already in place.
+The issues module: a real list, a detail page with the lifecycle, reporting by
+hand, assignment, photos, and links from the equipment and booking pages.
+Returns have been raising issues since Phase 9; this is where they get worked.
+Design in [docs/ARCHITECTURE.md §20](docs/ARCHITECTURE.md#20-issue-management-phase-11).
+
+**What exists**
+
+- No migration. The `Issue` model, its type / severity / status enums, the
+  `ISSUE_PHOTO` attachment kind, the `ISS-` number scope and the five audit
+  actions were all in the Phase 1 schema.
+- `src/lib/validation/issues.ts` - report, edit, assign and the four lifecycle
+  schemas; list params with seven filters.
+- `src/server/dal/issues.dal.ts` - list with filters, search, sort and paging;
+  counts per filter; the detail with every link, its photos and any maintenance
+  raised from it; the issue's own audit trail; assignable users; asset and kit
+  pickers.
+- `src/server/services/issues.service.ts` - `ISSUE_TRANSITIONS` and the pure
+  rules, `createIssue`, `updateIssue`, `assignIssue`, `startInvestigation`,
+  `resolveIssue`, `closeIssue`, `reopenIssue`, and the two page loaders.
+- `src/server/actions/issues.actions.ts` - seven actions under `issue.create`
+  and `issue.manage`.
+- Pages: `/issues` (was a placeholder), `/issues/[id]`, `/issues/new`.
+- `src/features/issues/` - the table, the summary panels, the lifecycle forms,
+  the photo strip, the history list, the report form, and `hrefs.ts`.
+- Photos: `addIssuePhoto` in the Phase 10 service, `getIssuePhotos` and
+  `getIssuePhotoFileInternal` in the attachments DAL, an `issue-photo` kind on
+  the authorised file route, and `uploadIssuePhotoAction`.
+- Links: the equipment Issues tab now opens each issue and offers "Report an
+  issue" for that asset; the booking's return summary links were written in
+  Phase 9 and now resolve.
+
+**Verification — Phase 11 (2026-09-07)**
+
+| Check | Result |
+|---|---|
+| `npm test` run 1 (39 files) | ✅ **372 / 372** |
+| `npm test` run 2 (39 files) | ✅ **372 / 372** |
+| Phases 1–10 suites | ✅ all green, unchanged |
+| Database after both runs | ✅ counters unchanged (ASSET 16, MAINTENANCE 1, BOOKING 1, no ISSUE row); the live booking, handover and two signatures untouched; 0 issues, 0 attachments |
+| Filesystem after both runs | ✅ the two live signature files only; no test photos, no test directories |
+| `scripts/db/verify-constraints.sql` | ✅ 29 / 29 constraint checks pass, rolled back (9c and 9d are seed-fixture assertions the two hand-created dev assets break by design) |
+| `prisma migrate status` | ✅ 6 migrations, up to date |
+| `prisma migrate diff --exit-code` | ✅ No difference detected |
+| `npm run check` | ✅ clean |
+| `npm run build` | ✅ clean; `/issues`, `/issues/[id]` and `/issues/new` compiled |
+
+**What the 25 Phase 11 tests prove**
+
+*Reporting* — an issue gets an `ISS-YYYY-NNNNNN` number, its links resolved and
+its reporter recorded, and reporting changes no equipment status; naming only an
+accessory fills in its asset; every link that does not exist is refused; an
+assignee must be an active engineer or administrator.
+
+*The lifecycle* — open → investigating → resolved → closed runs with an audit
+line each, and picking up an unowned issue assigns it to whoever did; closing
+something never resolved demands a written reason and records who decided;
+reopening clears the finished timestamps and keeps the previous resolution;
+every transition the table forbids is refused, as are edits and reassignment on
+a closed issue; corrections and reassignment work while it is live, including
+assigning it to nobody.
+
+*The Phase 9 join* — a return that records a missing item and a missing
+accessory raises two issues; both appear in the list pointing at the asset, the
+kit and the booking; the return's issue can then be investigated and resolved,
+and resolving it leaves the missing asset MISSING.
+
+*Finding them* — all seven filters, the counts behind them, search across
+number, title, equipment code and serial, severity ordering, and pagination.
+
+*Permissions* — engineers and admins are offered the transitions; a viewer is
+offered none and gets no assignee list; an editor holds nothing; all seven
+actions refuse anonymous, VIEWER and EDITOR callers with nothing moved;
+validation and lifecycle refusals come back as sentences.
+
+*Photos* — stored with metadata, a sanitised display name and an audit line;
+non-images, unknown issues and closed issues refused with nothing written; the
+twelve-photo limit; served with `nosniff` and `private, no-store` and no
+internals; anonymous 401; a VIEWER refused an equipment-only photo but allowed
+one that came from a booking they may read; another booking's editor refused;
+and issue photos not served as inspection photos.
+
+**Decisions taken in Phase 11**
+
+| Decision | Reason |
+|---|---|
+| Resolving an issue never changes asset or kit status | An issue records a fact; returning equipment to service is a deliberate act with the equipment in hand, and belongs to maintenance |
+| Closing without a fix requires a written reason | "Closed, no comment" is how a real fault gets forgotten |
+| Reopening keeps the previous resolution | The same fault coming back is the same issue, and what was tried last time is the useful part |
+| A resolved or closed issue cannot be edited, reassigned or photographed | It is a record at that point; reopen it first |
+| Picking an issue up assigns it to the picker when nobody owns it | The person looking at it is the person who owns it |
+| Assignees are limited to active ADMIN and ENGINEER accounts | Those are the roles that hold `issue.manage`; assigning work to someone who cannot do it is a dead end |
+| Naming only an accessory fills in its asset | So the issue shows on the equipment page, where someone will look for it |
+| Issue photos are authorised by `issue.read` **or** the booking rule | An issue may have no booking; one that came from a return is still part of that booking's story |
+| Issue photos are a separate route kind | The lookups are separate tables; a signature id must not resolve as a photo, and neither should an inspection photo id |
+
+**Manual browser checks worth doing**
+
+- [ ] As ENGINEER: Issues shows Open by default with counts on each tab;
+  search by an asset code finds the return-raised issues for it.
+- [ ] Open one raised by a return: the equipment, kit and booking all link out,
+  and "Found during" says the return inspection.
+- [ ] Press "I am looking at this" → status becomes Being investigated and your
+  name appears; resolve with a sentence → Resolved; close → Closed.
+- [ ] Reopen it with a reason → Open again, previous resolution still shown in
+  History.
+- [ ] Try to close an open issue with no reason → refused with a message.
+- [ ] Add a photo to a live issue; it opens full size. Close the issue and the
+  upload control disappears.
+- [ ] From Equipment › a MacBook › Issues: rows open, and "Report an issue"
+  pre-fills that asset.
+- [ ] As VIEWER: /issues is 403 (no `issue.read`). As the seeded EDITOR: also
+  403, and their booking page shows no issues section.
+- [ ] Light and dark themes; 768 px width: the lifecycle forms stack.
+
+---
+
+## Next: Phase 12 — Reports and PDF
+
+The report query layer (AD-5) and the ten reports, the handover and return PDFs
+rendered from the frozen `documentSnapshot` (AD-6), and CSV as the first extra
+renderer. `/reports` is still the placeholder that phase replaces. The
+signature and photo routes it needs are already in place from Phase 10, and
+the documents it renders have been frozen since Phases 8 and 9.
 
 **Open decisions carried forward**
 
 - Whether ENGINEER may manage kits (`kit.manage`) — still ADMIN only.
-- The handover / return PDF, now that its signatures and photos are served
-  through an authorised route.
+- The maintenance workflow itself: records are read-only, and an issue can
+  point at one, but nothing creates or advances them yet. Not in the remaining
+  roadmap phases; worth a decision after Phase 12.
 - Whether the overdue sweep is needed for notifications now that OVERDUE is
   derived at read time.
 - Rate-limit store for multi-instance deployment.
@@ -1553,7 +1670,5 @@ numbering are already in place.
   users who have signed in.
 - Two constraint-suite checks (9c, 9d) assert the pristine seed shape and fail
   against hand-created dev data; relax them or reseed.
-- `npm audit` reports advisories in the Prisma CLI's own dependency tree
-  (`deepmerge-ts`, `mysql2`), present before Phase 10 and unrelated to
-  `qrcode`; the suggested fix downgrades Prisma, so it is left for a deliberate
-  upgrade.
+- `npm audit` advisories in the Prisma CLI's own dependency tree, present since
+  before Phase 10; the suggested fix downgrades Prisma.

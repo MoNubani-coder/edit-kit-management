@@ -6,7 +6,7 @@ import { z } from 'zod'
 
 import { action, type ActionResult } from '@/server/auth/action'
 import { prisma } from '@/server/db/prisma'
-import { addInspectionPhoto } from '@/server/services/photos.service'
+import { addInspectionPhoto, addIssuePhoto } from '@/server/services/photos.service'
 import { photoStore } from '@/server/storage/photo-store'
 
 /**
@@ -46,6 +46,26 @@ const uploadReturnPhoto = action({
     return { id: photo.id }
   },
 })
+
+const issuePhotoInput = z.object({
+  issueId: z.string().min(1),
+  caption: z.preprocess((value) => (typeof value === 'string' && value.trim() === '' ? undefined : value), z.string().trim().max(200).optional()),
+  file: z.custom<File>((value) => value instanceof File, 'Choose a photo to upload.'),
+})
+
+const uploadIssuePhoto = action({
+  permission: 'issue.manage',
+  schema: issuePhotoInput,
+  async handler({ actor, input }) {
+    const photo = await addIssuePhoto(prisma, actor, { issueId: input.issueId, file: input.file, caption: input.caption }, photoStore)
+    revalidatePath(`/issues/${input.issueId}`)
+    return { id: photo.id }
+  },
+})
+
+export async function uploadIssuePhotoAction(_previous: PhotoFormState, formData: FormData): Promise<PhotoFormState> {
+  return uploadIssuePhoto({ issueId: formData.get('issueId'), caption: formData.get('caption'), file: formData.get('file') })
+}
 
 function payload(formData: FormData) {
   return { bookingId: formData.get('bookingId'), caption: formData.get('caption'), file: formData.get('file') }

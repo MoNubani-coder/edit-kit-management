@@ -205,10 +205,24 @@ as the wrong editor and get 403. Automated (37 tests).
 
 ---
 
-## Phase 11 — Issue management
+## Phase 11 — Issue management ✅ COMPLETE
 
-`ISS-YYYY-NNNNNN`, issue list and detail, lifecycle, photos, links from asset and
-booking pages.
+Delivered on the top-navigation shell: the issues list with seven counted
+filters and search across number, title, equipment, serial, kit and booking;
+the issue detail with what the problem is, what it is about (equipment,
+accessory, kit, booking and the inspection that found it, each linked for
+readers who hold that permission), the lifecycle - pick it up, resolve it with
+a sentence, close it (with a written reason when nothing was fixed), reopen it
+when the fault comes back - assignment to an active engineer or administrator,
+optional photos through the Phase 10 authorised route, and the issue's own
+audit trail as sentences. Reporting by hand from the equipment page or the
+list, with every link resolved server-side. `ISS-YYYY-NNNNNN` numbering was
+already in use by returns. No migration was needed.
+
+**Test:** a return records a missing item and a missing accessory; both issues
+appear against the asset, kit and booking, can be investigated and resolved -
+and resolving them leaves the missing asset MISSING, because an issue records a
+fact and never moves equipment (AD-24). Automated (25 tests).
 
 ---
 

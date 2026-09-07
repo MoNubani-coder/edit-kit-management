@@ -1,6 +1,6 @@
 # Edit Kit Management System — Architecture
 
-**Status:** Phase 10 (kit labels, photo evidence, file access) — complete. Phases 1–9 — complete.
+**Status:** Phase 11 (issue management) — complete. Phases 1–10 — complete.
 **Last updated:** 2026-09-05
 
 ---
@@ -775,6 +775,32 @@ same from outside; a row whose file has gone answers 410 rather than failing.
 Photos are optional evidence on an open inspection, capped at twelve, and
 frozen with the document they belong to - a return never touches a handover's.
 
+### AD-24 — An issue records a fact; it never moves equipment
+
+**Decision.** Issues are the written record of something wrong with equipment.
+Raising one changes no asset or kit status, and resolving or closing one does
+not put anything back into service. A missing asset stays MISSING and a damaged
+one stays DAMAGED until somebody deliberately moves it. Closing an issue that
+was never resolved requires a written reason; reopening keeps whatever was
+recorded last time.
+
+**Why.** The two things fail at different times. A return decides what state
+equipment is in, with the equipment in its hands (AD-22); an issue is the
+follow-up conversation about it, which may take days and may end in "nothing
+wrong after all". If resolving an issue quietly made the asset available, one
+optimistic click would put a broken machine back on the shelf, and the next
+hand-out would find out. Keeping them separate also means an issue can be about
+something with no status of its own - a case, an accessory, a delivery.
+
+**Consequence.** The issue lifecycle is small and self-contained: open, being
+investigated, resolved, closed, and reopened when the fault comes back. It
+carries evidence (photos, through the Phase 10 route with `issue.read` or the
+booking rule as the gate) and a full audit trail, and it links out to the
+equipment, kit, booking and inspection it came from. Returning equipment to
+service stays a deliberate act - the maintenance workflow's job - and a
+resolved issue on a missing asset is a state the system is happy to hold, which
+is exactly what the tests assert.
+
 ## 6. Folder structure
 
 ```
@@ -848,6 +874,7 @@ edit-kit-management/
 │  │  ├─ return/                          # Phase 9: handover recap, equipment return form, return checklist,
 │  │  │                                   #   start / complete forms, return summary
 │  │  ├─ photos/                          # Phase 10: photo evidence (upload + thumbnails), read-only photo strip
+│  │  ├─ issues/                          # Phase 11: hrefs.ts + table, summary, lifecycle forms, photos, history, report form
 │  │  ├─ admin/components/                # admin-tabs, category-form, category-active-toggle
 │  │  ├─ bookings/  kits/  assets/  editors/  issues/
 │  │  ├─ inspections/               # the wizard lives here
@@ -870,9 +897,9 @@ edit-kit-management/
 │  │  │  ├─ route-policy.ts         #   public / authenticated / permission per path
 │  │  │  ├─ rate-limit.ts           #   LoginRateLimiter seam + in-memory default
 │  │  │  └─ errors.ts               #   UnauthorizedError / ForbiddenError
-│  │  ├─ dal/                       # authorised reads (bookings, dashboard, assets, catalogue, kits, editors, handover, return, attachments)
+│  │  ├─ dal/                       # authorised reads (bookings, dashboard, assets, catalogue, kits, editors, handover, return, attachments, issues)
 │  │  ├─ actions/                   # server actions (auth, admin-users, assets, accessories, categories,
-│  │  │                             #   kits, kit-composition, editors, bookings, handover, return, photos)
+│  │  │                             #   kits, kit-composition, editors, bookings, handover, return, photos, issues)
 │  │  ├─ services/                  # business logic, transaction-aware
 │  │  │  ├─ dashboard.service.ts    # Phase 3: buildDashboard (permission-gated assembly)
 │  │  │  ├─ assets.service.ts       # Phase 4: lifecycle rules, create/update/remove, accessories
@@ -885,6 +912,7 @@ edit-kit-management/
 │  │  │  ├─ photos.service.ts       # Phase 10: optional evidence on an open inspection
 │  │  │  ├─ files.service.ts        # Phase 10: booking-scoped authorisation for signature / photo bytes
 │  │  │  ├─ qr.service.ts           # Phase 10: the kit scan path and inline SVG
+│  │  │  ├─ issues.service.ts       # Phase 11: the issue lifecycle, reporting, assignment
 │  │  │  ├─ errors.ts               # DomainError + unique-violation mapping
 │  │  │  ├─ booking.service.ts
 │  │  │  ├─ handover.service.ts
@@ -2604,3 +2632,167 @@ empty, oversized, injection-shaped and removed-kit tokens resolving to nothing;
 and the contextual actions across available, reserved, ready, checked out,
 overdue, return-inspection and removed states for ADMIN, ENGINEER, VIEWER and
 EDITOR.
+
+---
+
+## 20. Issue management (Phase 11)
+
+### 20.1 Where issues come from
+
+Almost none are typed in. A return that records an item missing or damaged
+raises one itself (Phase 9, §18.5): numbered `ISS-YYYY-NNNNNN` from the same
+atomic counter as bookings and assets, already pointing at the asset, the
+accessory, the kit, the booking and the inspection that found it, with the
+engineer who processed the return as the reporter. Phase 11 is what happens
+after that, plus the path for a fault noticed outside a return.
+
+Layers as everywhere else: `server/dal/issues.dal.ts` (list, detail, history,
+pickers - explicit selects, no storage paths),
+`server/services/issues.service.ts` (the lifecycle and its rules),
+`server/actions/issues.actions.ts` (`action()`-wrapped, `issue.create` to
+report and `issue.manage` to work), `features/issues/` (UI).
+
+### 20.2 The lifecycle
+
+```
+OPEN ──────────► UNDER_INVESTIGATION ──────► RESOLVED ──────► CLOSED
+  │                      │                      │               │
+  └──── CLOSED ──────────┴──── CLOSED ──────────┘               │
+  ◄──────────────────── reopen ─────────────────────────────────┘
+```
+
+`ISSUE_TRANSITIONS` is the table, and it is pure:
+
+| From | May become |
+|---|---|
+| OPEN | being investigated, resolved, closed |
+| UNDER_INVESTIGATION | open again, resolved, closed |
+| RESOLVED | closed, or reopened |
+| CLOSED | reopened |
+
+Three rules are worth stating:
+
+- **Resolving needs a sentence.** `resolution` is required, and is stamped with
+  who wrote it and when.
+- **Closing something that was never resolved needs a reason.** A report that
+  turns out to be nothing still gets a written explanation, because "closed,
+  no comment" is how a real fault gets forgotten. Closing a *resolved* issue
+  keeps the resolution already recorded.
+- **Reopening keeps the history.** The previous resolution stays on the row;
+  only `resolvedAt`, `resolvedById` and `closedAt` are cleared, and the audit
+  records why it came back. The same fault returning is the same issue.
+
+A finished issue is a record: `isIssueEditable` is false once it is resolved or
+closed, so its details cannot be edited, it cannot be reassigned, and evidence
+cannot be attached without reopening it first.
+
+### 20.3 What an issue never does
+
+Resolving an issue does not put equipment back into service. A missing asset
+stays MISSING and a damaged one stays DAMAGED until someone deliberately moves
+it - the maintenance workflow's job, and a decision a person makes with the
+equipment in front of them. The tests assert this directly: a resolved issue on
+a missing asset leaves the asset MISSING.
+
+Likewise, reporting an issue does not take anything *out* of service. An issue
+records a fact; asset and kit status remain the workflow's own business
+(Phase 4 rules, Phase 9 return outcomes).
+
+### 20.4 Assignment
+
+`assignedToId` may be any ACTIVE, non-deleted ADMIN or ENGINEER - the roles
+that hold `issue.manage` - or nobody, which is a real state and is audited as
+such. Picking an issue up (`startInvestigation`) assigns it to whoever pressed
+the button if it had no owner, which is the common case: the person looking at
+it is the person who owns it.
+
+### 20.5 Reporting by hand
+
+`createIssue` takes a type, a severity, a title and a description, plus any of
+asset, accessory, kit and booking. Every link is resolved against the database
+and refused if it does not exist, so a pasted id cannot create a dangling
+issue. Naming only an accessory fills in its asset as well, so the issue
+appears on the equipment page too.
+
+The report form is reached from the equipment page (pre-pointed at that asset),
+from the issues list, or with `?assetId=` / `?kitId=` / `?bookingId=`.
+
+### 20.6 Photos
+
+Issue photos reuse Phase 10 wholesale: the same store, the same byte-sniffed
+type check, the same generated names, the same twelve-per-record limit, the
+same authorised route. Two things differ:
+
+- the row is an `Attachment` of kind ISSUE_PHOTO hung off the issue (and off
+  the booking too, when the issue came from a return, so the booking's own
+  file authorisation still recognises it);
+- the route kind is `issue-photo`, and authorisation is `issue.read` **or** the
+  booking rule. An issue can exist with no booking at all - a fault noticed on
+  the shelf - so booking permissions alone cannot be the gate; and an issue
+  that *did* come from a return is part of that booking's story, so its reader
+  keeps access. A VIEWER, who holds `booking.read` but not `issue.read`, can
+  therefore see a return's issue photo and not an equipment-only one, which is
+  the intended line.
+
+### 20.7 Finding them
+
+The list filters on Open (open + being investigated), Being investigated,
+Resolved, Closed, Critical (critical and still open), Assigned to me, and All,
+each with a live count. Search reaches the issue number, the title, the
+description, the asset code, name and serial, the kit code and the booking
+number. Sorting by severity uses the enum's own order, so Critical can be
+brought to the top. Everything is a URL.
+
+### 20.8 Links
+
+The roadmap asked for links from the asset and booking pages, and they are
+both live now:
+
+| From | To |
+|---|---|
+| Equipment › Issues tab | each row opens the issue; "Report an issue" pre-points at that asset |
+| Booking › return summary | each raised issue opens (already written in Phase 9, now resolving) |
+| Issue detail | the asset, the kit, the booking, and any maintenance record raised from it - each only when the reader holds that permission |
+
+### 20.9 Permissions and audit
+
+`issue.read` to see, `issue.create` to report, `issue.manage` to work. ADMIN and
+ENGINEER hold all three; VIEWER holds none of them (so the issues section is
+not in their navigation and the pages refuse them); an EDITOR holds none
+either. Every mutation authorises server-side through the `action()` wrapper,
+and the page's buttons come from the service's own transition table - a URL
+followed by hand meets the same refusal.
+
+Audit: ISSUE_CREATED, ISSUE_UPDATED (edits, assignment, investigation start,
+reopen), ISSUE_RESOLVED, ISSUE_CLOSED and FILE_UPLOADED, all against
+`entityType: 'Issue'`, and the detail page renders them as sentences. **No
+migration was needed for Phase 11**: the `Issue` model, its enums, the
+`ISSUE_PHOTO` attachment kind, the `ISS-` number scope and all five audit
+actions were in the Phase 1 schema.
+
+### 20.10 Tests
+
+`tests/integration/issues.service.test.ts` (12): numbering, links and the
+reporter recorded, with equipment status untouched; an accessory implying its
+asset and every bad link refused; assignees restricted to active engineers and
+admins; the full open → investigating → resolved → closed run with its audit
+trail in order; the written reason demanded when closing something unresolved;
+reopening keeping the previous resolution; every refused transition, plus edits
+and reassignment refused on a closed issue; corrections and reassignment while
+live; the Phase 9 join - a return raising two issues that this service then
+works, leaving a missing asset MISSING; filters, counts, search, severity
+ordering and pagination; per-role permissions and offered transitions; and the
+pure transition table.
+
+`tests/integration/issues.actions.test.ts` (6): anonymous, VIEWER and EDITOR
+refused on all seven actions with nothing moved; ENGINEER reporting and working
+one; ADMIN closing and reopening; validation refusals; a lifecycle refusal
+reported as a sentence; and an assignee the matrix forbids.
+
+`tests/integration/issue-photos.test.ts` (7): a photo stored with metadata and
+an audit line, its client filename reduced to a label; non-images, unknown
+issues and closed issues refused with nothing written; the twelve-photo limit;
+served to issue readers with dull headers and no internals; anonymous 401 and a
+VIEWER refused an equipment-only photo; the booking side reading a photo that
+came from their booking, and another editor refused; and issue photos not being
+served as inspection photos.

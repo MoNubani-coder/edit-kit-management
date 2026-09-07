@@ -16,6 +16,7 @@ import { MaintenancePanel } from '@/features/assets/components/maintenance-panel
 import { formatDateTime } from '@/lib/datetime'
 import { env } from '@/lib/env'
 import { requirePermissionForPage } from '@/server/auth/page-guards'
+import { can } from '@/server/auth/permissions'
 import { prisma } from '@/server/db/prisma'
 import { loadAccessoryTypeOptions, loadAssetWorkspace } from '@/server/services/assets.service'
 
@@ -121,7 +122,9 @@ export default async function AssetDetailPage({
         {tab === 'maintenance' && asset.maintenance ? (
           <MaintenancePanel records={asset.maintenance} activeCount={asset.activeMaintenanceCount} timeZone={timeZone} />
         ) : null}
-        {tab === 'issues' && asset.issues ? <IssuesPanel issues={asset.issues} timeZone={timeZone} /> : null}
+        {tab === 'issues' && asset.issues ? (
+          <IssuesPanel issues={asset.issues} timeZone={timeZone} assetId={asset.id} canReport={can(actor, 'issue.create')} />
+        ) : null}
         {tab === 'history' ? <HistoryTimeline events={history} timeZone={timeZone} now={now} /> : null}
       </div>
     </>
