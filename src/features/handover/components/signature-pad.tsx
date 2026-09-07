@@ -17,6 +17,10 @@ import type { HandoverSignatureMeta } from '@/server/dal/handover.dal'
  * white "paper" so the stored PNG reads the same in either theme. The image is
  * the only thing the form sends: who signed is decided by the server from the
  * booking (editor) or the session (engineer).
+ *
+ * The pad itself is phase-agnostic: the handover posts to its own action and
+ * the return (Phase 9) passes its own through `action`, so there is one canvas
+ * implementation for both.
  */
 
 const INK = '#0f1b33'
@@ -30,6 +34,10 @@ export function SignaturePad({
   existing,
   disabled,
   timeZone,
+  action = captureSignatureFormAction,
+  title: titleOverride,
+  caption,
+  optional = false,
 }: {
   bookingId: string
   role: SignerRoleValue
@@ -38,8 +46,14 @@ export function SignaturePad({
   existing: HandoverSignatureMeta | null
   disabled: boolean
   timeZone: string
+  /** The Server Action this pad posts to; defaults to the handover's. */
+  action?: (previous: HandoverFormState, formData: FormData) => Promise<HandoverFormState>
+  title?: string
+  caption?: string
+  /** Shown when this signature is not required to complete. */
+  optional?: boolean
 }) {
-  const [state, formAction, pending] = useActionState<HandoverFormState, FormData>(captureSignatureFormAction, null)
+  const [state, formAction, pending] = useActionState<HandoverFormState, FormData>(action, null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const imageRef = useRef<HTMLInputElement>(null)
   const drawing = useRef(false)
@@ -122,7 +136,7 @@ export function SignaturePad({
     if (imageRef.current) imageRef.current.value = canvas.toDataURL('image/png')
   }
 
-  const title = role === 'EDITOR' ? 'Editor signature' : 'Engineer signature'
+  const title = titleOverride ?? (role === 'EDITOR' ? 'Editor signature' : 'Engineer signature')
 
   return (
     <div className="theme-transition rounded-panel border border-line bg-panel">
@@ -134,7 +148,8 @@ export function SignaturePad({
           </h3>
           <p className="mt-0.5 text-xs text-muted">
             Signing as <span className="font-medium text-foreground">{signerName}</span>
-            {role === 'EDITOR' ? ' · the editor named on the booking' : ' · the signed-in engineer'}
+            {caption ?? (role === 'EDITOR' ? ' · the editor named on the booking' : ' · the signed-in engineer')}
+            {optional ? ' · optional' : ''}
           </p>
         </div>
         {existing ? (

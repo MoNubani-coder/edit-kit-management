@@ -39,6 +39,7 @@ export interface HandoverBooking {
   bookingEnd: Date
   collectionDate: Date | null
   expectedReturnDate: Date
+  actualReturnDate: Date | null
   purpose: string | null
   notes: string | null
   checklistTemplateId: string | null
@@ -69,6 +70,7 @@ export async function getHandoverBooking(db: Db, bookingId: string): Promise<Han
       bookingEnd: true,
       collectionDate: true,
       expectedReturnDate: true,
+      actualReturnDate: true,
       purpose: true,
       notes: true,
       checklistTemplateId: true,

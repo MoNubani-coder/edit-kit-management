@@ -4,6 +4,7 @@ import { AuditAction, BookingStatus, KitStatus, NumberScope } from '@prisma/clie
 
 import {
   type BookingSchedule,
+  canStartReturn,
   canTransition,
   editorBookingBlocker,
   editScopeFor,
@@ -40,6 +41,7 @@ import {
 } from '@/server/dal/bookings.dal'
 import { searchActiveEditors } from '@/server/dal/editors.dal'
 import { getHandoverSummary, type HandoverSummary } from '@/server/dal/handover.dal'
+import { getReturnSummary, type ReturnSummary } from '@/server/dal/return.dal'
 import { getKitAvailabilityFacts, getKitDetail, type KitCandidate, type KitDetail, searchKitCandidates } from '@/server/dal/kits.dal'
 import { prisma, type Db } from '@/server/db/prisma'
 import { recordAudit } from '@/server/services/audit.service'
@@ -544,21 +546,27 @@ export interface BookingWorkspace {
   canReadKit: boolean
   canReadEditor: boolean
   canReadAssets: boolean
+  canReadIssues: boolean
   /** The actor may open the handover workspace for a READY_FOR_HANDOVER booking. */
   canHandover: boolean
   /** The handover inspection on record, once one has been started or completed. */
   handover: HandoverSummary | null
+  /** The actor may open the return workspace: the kit is out, or being inspected. */
+  canReturn: boolean
+  /** The return inspection on record, once one has been started or completed. */
+  returnInspection: ReturnSummary | null
 }
 
 export async function loadBookingWorkspace(db: Db, actor: Actor, id: string, now: Date = new Date()): Promise<BookingWorkspace | null> {
   const booking = await getBookingDetailForActor(db, actor, id)
   if (!booking) return null
 
-  const [facts, kit, activity, handover] = await Promise.all([
+  const [facts, kit, activity, handover, returnInspection] = await Promise.all([
     getKitAvailabilityFacts(db, booking.kit.id),
     getKitDetail(db, booking.kit.id, { includeIssues: false }),
     getBookingActivity(db, id),
     getHandoverSummary(db, id),
+    getReturnSummary(db, id),
   ])
 
   const manage = can(actor, 'booking.update')
@@ -581,8 +589,16 @@ export async function loadBookingWorkspace(db: Db, actor: Actor, id: string, now
     canReadKit: can(actor, 'kit.read'),
     canReadEditor: can(actor, 'editor.read'),
     canReadAssets: can(actor, 'asset.read'),
+    canReadIssues: can(actor, 'issue.read'),
     canHandover: can(actor, 'handover.perform') && booking.status === BookingStatus.READY_FOR_HANDOVER,
     handover,
+    // The return covers a kit that is out (Phase 9 owns CHECKED_OUT onwards) and
+    // one already under inspection, so a half-finished return can be resumed.
+    canReturn:
+      can(actor, 'return.perform') &&
+      (canStartReturn(booking.status) || booking.status === BookingStatus.RETURN_INSPECTION) &&
+      handover?.status === 'COMPLETED',
+    returnInspection,
   }
 }
 

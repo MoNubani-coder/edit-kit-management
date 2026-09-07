@@ -161,13 +161,27 @@ equipment, which is refused.
 
 ---
 
-## Phase 9 — Digital signatures
+## Phase 9 — Return inspection ✅ COMPLETE
 
-Pointer-events signature pad (mouse, touch, stylus), SHA-256 hashing, IP and
-user-agent capture, authorised file serving, void-don't-delete.
+Delivered on the top-navigation shell: the return workspace at
+`/bookings/[id]/return` for a kit that is out or overdue - what went out,
+then equipment back (every handed-over item and accessory, answered returned,
+damaged or not returned on thumb-sized controls), the booking's own
+return-phase checks, the receiving engineer's signature on the device with the
+editor's optional, and a completion that re-checks the handover it is measured
+against, every answer and that signature inside one Serializable, row-locked
+transaction before freezing the return document, setting `actualReturnDate`
+from the server clock, completing the booking, putting each asset back to the
+status its condition implies, raising an Issue per damaged or missing item, and
+re-evaluating the kit through the Phase 5 readiness rule rather than assuming
+it is available. Lateness is derived from the expected and actual times, never
+stored. Idempotent start, no second document on a repeat. No migration was
+needed.
 
-**Test:** sign on an actual tablet with a finger. This is the one feature that
-cannot be validated with a mouse.
+**Test:** a kit comes back with one item damaged and one missing; the booking
+completes, two issues are raised, the equipment carries the right statuses and
+the kit stays out of service with the reason on its history. Automated
+(32 tests).
 
 ---
 

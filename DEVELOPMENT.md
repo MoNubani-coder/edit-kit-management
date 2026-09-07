@@ -2,12 +2,12 @@
 
 Running log of what exists, what to test, and what comes next.
 
-- **Current phase:** 8 of 13 — Handover / collection — ✅ **complete**
+- **Current phase:** 9 of 13 — Return inspection — ✅ **complete**
 - **Status:** verified against PostgreSQL 16.15 — six migrations applied (none
-  new in Phase 8), zero drift, 31/31 database constraint tests, 278/278 Vitest
-  tests (two consecutive runs, database and numbering counters unchanged),
-  typecheck + lint clean, production build clean
-- **Last updated:** 2026-09-07 (Phase 8, plus the authentication redirect-loop fix)
+  new in Phase 8 or 9), zero drift, 29/29 database constraint checks, 310/310
+  Vitest tests (two consecutive runs, database and numbering counters
+  unchanged), typecheck + lint clean, production build clean
+- **Last updated:** 2026-09-07 (Phase 9, after Phase 8 and the authentication redirect-loop fix)
 
 ### Fix: the /login ↔ /dashboard redirect loop
 
@@ -27,6 +27,7 @@ error page, JSON 503 or a retryable action failure, and leaves the session
 alone. Design in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) AD-21; regression
 cover in `tests/integration/auth-redirect-loop.test.ts` (19) and
 `tests/integration/auth-outage.test.ts` (7).
+
 Companion documents: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (design and
 rationale) · [docs/ROADMAP.md](docs/ROADMAP.md) (all 13 phases).
 
@@ -1254,3 +1255,181 @@ the internal EDITOR's own booking still reads afterwards.
 
 ---
 
+## Phase 9 — Return inspection (complete)
+
+The return workspace at `/bookings/[id]/return`: what went out, then equipment
+back, return checks, the engineer's confirmation, and a completion that moves
+the booking CHECKED_OUT (or OVERDUE) → RETURN_INSPECTION → COMPLETED in one
+transaction. Design in
+[docs/ARCHITECTURE.md §18](docs/ARCHITECTURE.md#18-return-inspection-phase-9)
+and AD-22.
+
+**What exists**
+
+- No migration. The Phase 1 schema already had the RETURN inspection type, the
+  `RETURN_EDITOR` / `RETURN_ENGINEER` signature types, the RETURN checklist
+  phase, `Booking.actualReturnDate`, the whole `Issue` model and every audit
+  action used (`RETURN_STARTED`, `RETURN_COMPLETED`, `ISSUE_CREATED`,
+  `ASSET_STATUS_CHANGED`, `KIT_STATUS_CHANGED`, `BOOKING_STATUS_CHANGED`).
+- `src/lib/validation/return.ts` - line, accessory, checklist, signature and
+  completion schemas, reusing the handover's condition values and
+  `parseLineFields`.
+- `src/lib/booking-rules.ts` gained `RETURN_START_STATUSES`, `canStartReturn`,
+  `returnPunctuality` and `minutesLate` - all pure.
+- `src/server/dal/return.dal.ts` - `getHandoverForReturn` (the historical
+  source), `getLiveReturn` (the working document, with each line's handover
+  condition joined in), `getReturnSummary` (counts, signatures and issues for
+  the booking page). No signature path or hash ever leaves.
+- `src/server/services/return.service.ts` - `bookingReturnBlockers`,
+  `returnVerdict`, `kitStatusAfterReturn`, `startReturn`,
+  `saveReturnEquipment`, `saveReturnChecklist`, `captureReturnSignature`,
+  `completeReturn` (Serializable, row-locked), `loadReturnWorkspace`.
+- `src/server/actions/return.actions.ts` - five actions through `action()`.
+- Page: `/bookings/[id]/return`. `src/features/return/` - the handover recap,
+  the equipment return form (three big answers per row plus "not checked"),
+  the return checklist form, start / complete forms, and the return summary.
+  Phase 8's identity panels, step card, signature pad and signature store are
+  reused; the pad took an optional `action` prop so one canvas serves both
+  phases.
+- The booking overview gained the "Start / Continue return" action, the return
+  summary with an early / on time / late badge, and new next-step wording for
+  the out, overdue and return-inspection states.
+- Tests: `tests/integration/return.service.test.ts`,
+  `tests/integration/return.actions.test.ts`, `tests/unit/return-rules.test.ts`.
+
+**Verification — Phase 9 (2026-09-07)**
+
+| Check | Result |
+|---|---|
+| `npm test` run 1 (32 files) | ✅ **310 / 310** |
+| `npm test` run 2 (32 files) | ✅ **310 / 310** |
+| Phase 8 handover suites | ✅ 14 / 14 |
+| Auth redirect-loop + outage suites | ✅ 26 / 26 |
+| Animated sign-out suites | ✅ 12 / 12 |
+| Booking half-open boundary suite | ✅ 2 / 2 |
+| Database after both runs | ✅ counters unchanged (ASSET 16, MAINTENANCE 1, BOOKING 1, no ISSUE row); the real dev booking, handover, two signatures and 12 checklist items untouched; no `RET-` / `RTA-` rows, no issues, no stray inspections or signature files |
+| `scripts/db/verify-constraints.sql` | ✅ 29 / 29 constraint checks pass, rolled back (checks 9c and 9d are seed-fixture assertions that the two hand-created dev assets break by design) |
+| `prisma migrate status` | ✅ 6 migrations, up to date |
+| `prisma migrate diff --exit-code` | ✅ No difference detected |
+| `npm run check` | ✅ clean |
+| `npm run build` | ✅ clean, `/bookings/[id]/return` compiled |
+
+**What the 32 return tests prove** (`npm test`; every write inside a
+rolled-back transaction, signature images in memory):
+
+*The snapshot is the authority* — starting copies the completed handover's
+lines, their accessories and the quantity that actually went out, once; the
+booking moves to return inspection; pressing Start again returns the same
+document. An asset an administrator later takes off the kit is still owed and
+flagged as no longer in the kit; an asset added to the kit afterwards is not
+part of the return; an item recorded missing or damaged at handover never went
+out, so it is not something to account for.
+
+*Eligibility* — draft, reserved, ready-for-handover, completed and unknown
+bookings are refused; a booking with no handover, or one whose handover was
+never completed, is refused with the reason; an overdue kit is accepted and the
+timeline says Overdue → Return inspection.
+
+*Enforcement* — completion is refused while any handed-over item has no answer,
+and it names them; required return checks must be answered; the engineer
+receiving the kit must have signed; the editor's signature is a warning, not a
+blocker; a failed required check is recorded and warned about rather than
+blocking; a line id from another return is refused.
+
+*A clean return* — booking COMPLETED with a server `actualReturnDate`,
+collection and expected return untouched; every asset AVAILABLE with a status
+log naming the booking; kit AVAILABLE; the document frozen with both the
+handover and return conditions; the handover's two signatures still live and
+unedited alongside the return's two; activity newest-first with the completion
+above the start.
+
+*A return with problems* — a damaged asset becomes DAMAGED, one not returned
+becomes MISSING, the healthy one AVAILABLE; three issues are raised (missing
+HIGH, damaged MEDIUM, accessory LOW) numbered `ISS-`, linked to the booking,
+inspection, kit and asset; the kit becomes DAMAGED rather than available; the
+accessory's own master data is untouched; asset and kit audits are written; the
+summary counts match and expose no storage fields. A returned item already
+under repair leaves the kit MAINTENANCE while the booking still closes.
+
+*Safety* — withdrawing the engineer's signature at the last moment refuses the
+completion and leaves the booking RETURN_INSPECTION, the kit CHECKED_OUT, every
+asset CHECKED_OUT, the inspection unlocked and no issues; a completed return
+refuses further edits and the database trigger refuses one too; a second
+submit is a sentence, not a second document.
+
+*Authorisation and after* — anonymous, VIEWER and EDITOR cannot start, record,
+sign or complete; ENGINEER starts once however often the button is pressed;
+the signature is attributed to the session whatever the form claims; ADMIN
+completes once with the confirmation box; an internal editor's own completed
+booking still reads, without storage details.
+
+*Pure rules* — a return may start only from CHECKED_OUT or OVERDUE; early, on
+time and late are derived from the two timestamps with a 15-minute grace
+window either side, and lateness is reported in whole minutes.
+
+**Decisions taken in Phase 9**
+
+| Decision | Reason |
+|---|---|
+| The return is measured against the completed handover, never live kit composition | The kit may have changed since; what was handed out is what is owed (AD-22) |
+| A copied line starts NOT_APPLICABLE, meaning "not accounted for yet" | Lets completion insist on an explicit answer for everything that went out, with no new column or enum value |
+| Problems warn but never block completion | The kit is physically back and the booking must close with the truth on it; the problem is preserved as an Issue |
+| One Issue per damaged or missing asset and accessory, numbered like everything else | Reuses the existing issue model instead of a second problem system |
+| Missing asset HIGH, damaged asset MEDIUM, accessory LOW | Rough triage an operator can re-prioritise; a lost asset is the expensive case |
+| Asset status follows the recorded condition, with a status log | The asset's history has to say where the equipment ended up |
+| The kit is re-evaluated through the Phase 5 readiness service after the assets are put back | A completed booking is not evidence that the kit is fit to go out again |
+| Blocked kits become MAINTENANCE when a member is under repair, otherwise DAMAGED | Both are existing statuses that keep the kit out of service with a reason in the audit |
+| The engineer's return signature is required, the editor's optional | Kits are often dropped off without the editor; an external editor has no account (AD-20), so requiring their signature would block a legitimate return |
+| Lateness is derived, never stored | `expectedReturnDate` and `actualReturnDate` already say it; a completed booking is no longer operationally overdue but its history stays true |
+| Software is not re-checked on return | The handover proved the build at collection; re-checking software on a returned machine belongs with re-preparation, not with receipt |
+| "Other issue" is a note plus, where it matters, an Issue | Avoids a fifth condition value that would need a migration and would overlap with the issue model |
+
+**Manual browser checks worth doing**
+
+- [ ] As ENGINEER on a CHECKED_OUT booking: the overview shows *Start return
+  inspection*; the return page shows booking, editor and kit, then "What went
+  out" listing the handed-over items.
+- [ ] *Start return inspection* → the booking reads Return inspection, the four
+  stages appear, and every handed-over row starts on "Not checked".
+- [ ] Mark one item Returned, one Damaged with a note, one Not returned; save.
+  Stage 4 lists the two problems as recorded-not-blocking.
+- [ ] Leave one row on "Not checked" → stage 4 refuses and names it.
+- [ ] Answer the return checks; leave a required one unanswered → refused.
+- [ ] Sign as the engineer; leave the editor pad empty → only a warning.
+- [ ] Tick the confirmation and complete → booking Completed, actual return
+  time shown, an early / on time / late badge, the return summary with counts,
+  the issues raised, the return notes, and the handover summary still below it.
+- [ ] The kit page: available if everything came back healthy, damaged or in
+  maintenance if not, with the reason in its history.
+- [ ] The issues raised open from the return summary (with `issue.read`).
+- [ ] Press Complete twice quickly or from two tabs → one document, a sentence
+  on the second.
+- [ ] As VIEWER the return page is 403; as the seeded EDITOR their own booking
+  shows the summary and no return controls.
+- [ ] Light and dark themes; 768 px width: the answer buttons stay thumb-sized
+  and the rows stack.
+
+---
+
+## Next: Phase 10 — Issues and maintenance
+
+Phase 9 raises issues; Phase 10 works them. An issues list and detail with
+assignment, severity and status transitions (OPEN → UNDER_INVESTIGATION →
+RESOLVED → CLOSED), maintenance records opened from an issue, the asset and kit
+returning to service when the work is done, and the dashboard counts that go
+with it. The `Issue` and `MaintenanceRecord` models, their audit actions and
+the `MNT-` numbering are already in place and already used by Phase 4's
+maintenance rules and Phase 9's returns.
+
+**Open decisions carried forward**
+
+- Whether ENGINEER may manage kits (`kit.manage`) — still ADMIN only.
+- Serving signature images and the handover / return PDFs through an authorised
+  file route (AD-6).
+- Whether the overdue sweep is needed for notifications now that OVERDUE is
+  derived at read time.
+- Rate-limit store for multi-instance deployment.
+- The soft-deleted smoke accounts and the hard-delete-vs-audit question for
+  users who have signed in.
+- Two constraint-suite checks (9c, 9d) assert the pristine seed shape and now
+  fail against hand-created dev data; decide whether to relax them or reseed.

@@ -98,6 +98,44 @@ export function isBookingOverdue(status: BookingStatusValue, expectedReturnDate:
   return status === 'CHECKED_OUT' && expectedReturnDate.getTime() < now.getTime()
 }
 
+/**
+ * Statuses a return inspection may be started from: the kit is physically out.
+ * OVERDUE is included because a late kit still has to come back the same way.
+ */
+export const RETURN_START_STATUSES = ['CHECKED_OUT', 'OVERDUE'] as const satisfies readonly BookingStatusValue[]
+
+export function canStartReturn(status: BookingStatusValue): boolean {
+  return (RETURN_START_STATUSES as readonly string[]).includes(status)
+}
+
+export type ReturnPunctuality = 'early' | 'on-time' | 'late'
+
+/**
+ * Minutes either side of the expected return that still count as on time.
+ * Without a grace window every return is early or late to the second, which
+ * tells an operator nothing.
+ */
+export const RETURN_GRACE_MINUTES = 15
+
+/**
+ * Early, on time or late, derived from the two timestamps the booking already
+ * stores. Nothing about lateness is persisted: a completed booking is no
+ * longer operationally overdue, but its history still says it came back late.
+ */
+export function returnPunctuality(expectedReturnDate: Date, actualReturnDate: Date, graceMinutes: number = RETURN_GRACE_MINUTES): ReturnPunctuality {
+  const differenceMs = actualReturnDate.getTime() - expectedReturnDate.getTime()
+  const graceMs = graceMinutes * 60 * 1000
+  if (differenceMs > graceMs) return 'late'
+  if (differenceMs < -graceMs) return 'early'
+  return 'on-time'
+}
+
+/** How late, in whole minutes; 0 when it was not late. */
+export function minutesLate(expectedReturnDate: Date, actualReturnDate: Date): number {
+  const differenceMs = actualReturnDate.getTime() - expectedReturnDate.getTime()
+  return differenceMs > 0 ? Math.floor(differenceMs / 60000) : 0
+}
+
 /** `[now, now + hours)` - the window the "Due soon" filter and the dashboard share. */
 export function dueSoonWindow(now: Date, hours: number): { from: Date; to: Date } {
   return { from: now, to: new Date(now.getTime() + hours * HOUR_MS) }
