@@ -41,6 +41,7 @@ import {
 } from '@/server/dal/bookings.dal'
 import { searchActiveEditors } from '@/server/dal/editors.dal'
 import { getHandoverSummary, type HandoverSummary } from '@/server/dal/handover.dal'
+import { getBookingPhotos, type PhotoMeta } from '@/server/dal/attachments.dal'
 import { getReturnSummary, type ReturnSummary } from '@/server/dal/return.dal'
 import { getKitAvailabilityFacts, getKitDetail, type KitCandidate, type KitDetail, searchKitCandidates } from '@/server/dal/kits.dal'
 import { prisma, type Db } from '@/server/db/prisma'
@@ -555,18 +556,21 @@ export interface BookingWorkspace {
   canReturn: boolean
   /** The return inspection on record, once one has been started or completed. */
   returnInspection: ReturnSummary | null
+  /** Optional photo evidence from either inspection; metadata only. */
+  photos: PhotoMeta[]
 }
 
 export async function loadBookingWorkspace(db: Db, actor: Actor, id: string, now: Date = new Date()): Promise<BookingWorkspace | null> {
   const booking = await getBookingDetailForActor(db, actor, id)
   if (!booking) return null
 
-  const [facts, kit, activity, handover, returnInspection] = await Promise.all([
+  const [facts, kit, activity, handover, returnInspection, photos] = await Promise.all([
     getKitAvailabilityFacts(db, booking.kit.id),
     getKitDetail(db, booking.kit.id, { includeIssues: false }),
     getBookingActivity(db, id),
     getHandoverSummary(db, id),
     getReturnSummary(db, id),
+    getBookingPhotos(db, id),
   ])
 
   const manage = can(actor, 'booking.update')
@@ -599,6 +603,7 @@ export async function loadBookingWorkspace(db: Db, actor: Actor, id: string, now
       (canStartReturn(booking.status) || booking.status === BookingStatus.RETURN_INSPECTION) &&
       handover?.status === 'COMPLETED',
     returnInspection,
+    photos,
   }
 }
 

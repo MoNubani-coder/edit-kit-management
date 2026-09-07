@@ -13,7 +13,9 @@ import { ChecklistPanel } from '@/features/kits/components/checklist-panel'
 import { EquipmentPanel } from '@/features/kits/components/equipment-panel'
 import { RemoveKitForm } from '@/features/kits/components/kit-action-forms'
 import { KitHistory } from '@/features/kits/components/kit-history'
+import { KitOperationsPanel } from '@/features/kits/components/kit-operations-panel'
 import { KitOverview } from '@/features/kits/components/kit-overview'
+import { KitQrPanel } from '@/features/kits/components/kit-qr-panel'
 import { SoftwarePanel } from '@/features/kits/components/software-panel'
 import { kitHref } from '@/features/kits/hrefs'
 import { formatDateTime } from '@/lib/datetime'
@@ -22,12 +24,15 @@ import { KIT_TAB_LABELS, KIT_TABS, parseKitTab } from '@/lib/validation/kits'
 import { requirePermissionForPage } from '@/server/auth/page-guards'
 import { prisma } from '@/server/db/prisma'
 import {
+  kitOperations,
   loadAssetCandidates,
   loadChecklistPreview,
   loadKitChecklistOptions,
   loadKitSoftwareOptions,
   loadKitWorkspace,
 } from '@/server/services/kits.service'
+import { kitQrCode } from '@/server/services/qr.service'
+import { can } from '@/server/auth/permissions'
 
 export const metadata: Metadata = { title: 'Kit' }
 
@@ -85,6 +90,11 @@ export default async function KitDetailPage({
   }
   const tabs = KIT_TABS.map((key) => ({ key, label: KIT_TAB_LABELS[key], href: kitHref(kit.id, key), count: counts[key] }))
 
+  // What a scan should answer immediately: where the kit stands and what to do
+  // next. The label is only worth showing for a kit that still exists.
+  const operations = kitOperations({ kit: { id: kit.id, status: kit.status, deleted: removed }, availability, liveBooking: kit.liveBooking, actor })
+  const qr = removed ? null : await kitQrCode(kit.id)
+
   return (
     <>
       <PageHeader
@@ -126,9 +136,23 @@ export default async function KitDetailPage({
           </Alert>
         ) : null}
 
+        <KitOperationsPanel
+          kit={{ id: kit.id, kitCode: kit.kitCode, name: kit.name, status: kit.status, admBarcode: kit.admBarcode }}
+          availability={availability}
+          liveBooking={kit.liveBooking}
+          operations={operations}
+          timeZone={timeZone}
+          canReadEditor={can(actor, 'editor.read')}
+        />
+
         <SectionTabs label="Kit sections" tabs={tabs} active={tab} />
 
-        {tab === 'overview' ? <KitOverview kit={kit} availability={availability} timeZone={timeZone} /> : null}
+        {tab === 'overview' ? (
+          <>
+            <KitOverview kit={kit} availability={availability} timeZone={timeZone} />
+            {qr ? <KitQrPanel kit={{ id: kit.id, kitCode: kit.kitCode, name: kit.name }} qr={qr} /> : null}
+          </>
+        ) : null}
         {tab === 'equipment' ? (
           <EquipmentPanel
             kit={kit}

@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { buttonVariants } from '@/components/ui/button'
 import { KitAvailabilityBadge } from '@/features/kits/components/availability-badge'
 import { HandoverSummaryPanel } from '@/features/handover/components/handover-summary'
+import { PhotoStrip } from '@/features/photos/components/photo-strip'
 import { ReturnSummaryPanel } from '@/features/return/components/return-summary'
 import { AvailabilityNotice } from '@/features/kits/components/availability-notice'
 import { BOOKING_STATUS_LABELS } from '@/lib/booking-rules'
@@ -203,6 +204,8 @@ export function BookingOverview({ workspace, timeZone, now }: { workspace: Booki
       ) : null}
 
       {workspace.handover ? <HandoverSummaryPanel summary={workspace.handover} collectionDate={booking.collectionDate} timeZone={timeZone} /> : null}
+
+      {workspace.photos.length > 0 ? <PhotoStrip photos={workspace.photos} timeZone={timeZone} /> : null}
 
       {readiness && !readiness.available && booking.status !== 'CANCELLED' && booking.status !== 'COMPLETED' && booking.status !== 'CHECKED_OUT' ? <AvailabilityNotice availability={readiness} /> : null}
 

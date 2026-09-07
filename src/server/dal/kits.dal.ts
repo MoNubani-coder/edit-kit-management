@@ -300,6 +300,23 @@ export async function countKitsByStatus(db: Db): Promise<Record<KitStatus, numbe
 }
 
 /** Barcode-scanner path: an exact kit barcode opens the kit. */
+/**
+ * A kit from whatever a label carries: the id the QR encodes, or - for a label
+ * printed before the QR run, or a code typed by hand - its kit code or ADM
+ * barcode. Removed kits are not resolved; a scan of a retired case is a 404.
+ */
+export async function findKitByScan(db: Db, token: string): Promise<{ id: string; kitCode: string } | null> {
+  const trimmed = token.trim()
+  if (trimmed === '' || trimmed.length > 64) return null
+  return db.kit.findFirst({
+    where: {
+      deletedAt: null,
+      OR: [{ id: trimmed }, { kitCode: { equals: trimmed, mode: 'insensitive' } }, { admBarcode: { equals: trimmed, mode: 'insensitive' } }],
+    },
+    select: { id: true, kitCode: true },
+  })
+}
+
 export async function findKitIdByBarcode(db: Db, barcode: string): Promise<string | null> {
   const code = barcode.trim()
   if (!code) return null

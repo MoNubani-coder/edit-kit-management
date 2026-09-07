@@ -1,6 +1,6 @@
 # Edit Kit Management System — Architecture
 
-**Status:** Phase 9 (return inspection) — complete. Phases 1–8 — complete.
+**Status:** Phase 10 (kit labels, photo evidence, file access) — complete. Phases 1–9 — complete.
 **Last updated:** 2026-09-05
 
 ---
@@ -749,6 +749,32 @@ the editor's signature is optional because a kit is often dropped off without
 them and an external editor has no account (AD-20). The handover's own
 signatures and document are never touched.
 
+### AD-23 — A case label is public; a file is a booking record
+
+**Decision.** A kit's QR code encodes one opaque URL, `/k/<kit id>`, and nothing
+else; following it requires a session and `kit.read`. Signature images and
+photos are never static files: they are served by `/api/files/<kind>/<id>`,
+which resolves the row, authorises the caller against the booking the file
+belongs to (`booking.read`, or `booking.readOwn` for the booking's own
+editor), and only then reads the bytes through a single read path that refuses
+to resolve outside the store. Uploaded files are typed by their bytes, bounded
+in size, and stored under names the server generates.
+
+**Why.** A label on a flight case can be read by anyone who can see the case,
+so it must carry nothing worth reading. A signature or a photo of someone's
+equipment is part of a booking's record, so the booking's permissions are the
+right ones to decide who sees it - and an external editor, who has no account,
+has no file access at all, which is consistent with signing in person (AD-20).
+Everything the client says about an upload - its name, its type, its size - is
+a claim; the store trusts only the bytes it counted and sniffed itself.
+
+**Consequence.** The QR payload is stable across renaming and renumbering, and
+a lost case tells a stranger nothing. Paths, providers and hashes never leave
+the DAL to a page or a response; an unknown id and a forbidden one look the
+same from outside; a row whose file has gone answers 410 rather than failing.
+Photos are optional evidence on an open inspection, capped at twelve, and
+frozen with the document they belong to - a return never touches a handover's.
+
 ## 6. Folder structure
 
 ```
@@ -821,6 +847,7 @@ edit-kit-management/
 │  │  │                                   #   signature pad (canvas), start / complete forms, summary
 │  │  ├─ return/                          # Phase 9: handover recap, equipment return form, return checklist,
 │  │  │                                   #   start / complete forms, return summary
+│  │  ├─ photos/                          # Phase 10: photo evidence (upload + thumbnails), read-only photo strip
 │  │  ├─ admin/components/                # admin-tabs, category-form, category-active-toggle
 │  │  ├─ bookings/  kits/  assets/  editors/  issues/
 │  │  ├─ inspections/               # the wizard lives here
@@ -843,9 +870,9 @@ edit-kit-management/
 │  │  │  ├─ route-policy.ts         #   public / authenticated / permission per path
 │  │  │  ├─ rate-limit.ts           #   LoginRateLimiter seam + in-memory default
 │  │  │  └─ errors.ts               #   UnauthorizedError / ForbiddenError
-│  │  ├─ dal/                       # authorised reads (bookings, dashboard, assets, catalogue, kits, editors, handover, return)
+│  │  ├─ dal/                       # authorised reads (bookings, dashboard, assets, catalogue, kits, editors, handover, return, attachments)
 │  │  ├─ actions/                   # server actions (auth, admin-users, assets, accessories, categories,
-│  │  │                             #   kits, kit-composition, editors, bookings, handover, return)
+│  │  │                             #   kits, kit-composition, editors, bookings, handover, return, photos)
 │  │  ├─ services/                  # business logic, transaction-aware
 │  │  │  ├─ dashboard.service.ts    # Phase 3: buildDashboard (permission-gated assembly)
 │  │  │  ├─ assets.service.ts       # Phase 4: lifecycle rules, create/update/remove, accessories
@@ -855,6 +882,9 @@ edit-kit-management/
 │  │  │  ├─ bookings.service.ts     # Phase 7: reservation gate, explicit transitions, edit, cancellation
 │  │  │  ├─ handover.service.ts     # Phase 8: eligibility, snapshot, verification, signatures, atomic completion
 │  │  │  ├─ return.service.ts       # Phase 9: handover-snapshot authority, conditions, issues, kit re-evaluation
+│  │  │  ├─ photos.service.ts       # Phase 10: optional evidence on an open inspection
+│  │  │  ├─ files.service.ts        # Phase 10: booking-scoped authorisation for signature / photo bytes
+│  │  │  ├─ qr.service.ts           # Phase 10: the kit scan path and inline SVG
 │  │  │  ├─ errors.ts               # DomainError + unique-violation mapping
 │  │  │  ├─ booking.service.ts
 │  │  │  ├─ handover.service.ts
@@ -865,7 +895,7 @@ edit-kit-management/
 │  │  │  └─ numbering.service.ts
 │  │  ├─ reports/                   # report definitions + renderers
 │  │  ├─ pdf/                       # document renderer
-│  │  └─ storage/                   # Phase 8: signature-store (local files + in-memory for tests); Azure later
+│  │  └─ storage/                   # Phase 8: signature-store; Phase 10: photo-store + the one contained read path; Azure later
 │  │
 │  ├─ lib/
 │  │  ├─ env.ts                     # zod-validated environment
@@ -2415,3 +2445,162 @@ without a second document, and a VIEWER still refused afterwards.
 `tests/unit/return-rules.test.ts` (6): which statuses a return may start from,
 and the early / on time / late derivation including the grace window and
 whole-minute lateness.
+
+---
+
+## 19. Kit labels, photo evidence and file access (Phase 10)
+
+### 19.1 One QR per kit
+
+A kit carries one QR code, printed on its case. It encodes a single short URL -
+`<origin>/k/<kit id>` - and nothing else: no kit code, no barcode, no editor,
+no booking, no status. A label on a flight case is readable by anyone standing
+next to it, so the payload is an opaque cuid that is useless without a login,
+and it is deliberately not the kit code, so a relabelled or renumbered kit
+keeps its sticker.
+
+Assets do not get their own codes in this phase. One code per case is what an
+engineer can actually scan while carrying it.
+
+`/k/<id>` is not public. The proxy sends an anonymous scan to `/login` with the
+path as its callback, so the engineer signs in on their phone and lands on the
+kit; with a session and `kit.read` the page resolves the token and redirects to
+`/kits/<id>`. `resolveScannedKit` accepts the id, the kit code or the ADM
+barcode - so a hand-typed code or an older sticker still works - and refuses
+anything unknown, removed, empty, over 64 characters or otherwise unmatched
+with a plain 404, which tells a stranger holding the case nothing.
+
+There is no in-app camera scanner: every phone and tablet already opens a URL
+from its own camera app, which needs no permission prompt, no client library
+and no video stream through the browser. If one is ever wanted, it belongs
+behind a separate decision rather than in this phase.
+
+`server/services/qr.service.ts` builds the payload and renders the code as an
+inline SVG (level M error correction, small quiet zone), so nothing is fetched
+at render time and the printable page needs no client JavaScript. The origin
+comes from the request headers rather than another environment variable, so
+the same deployment works on localhost, a LAN address or a domain.
+
+### 19.2 The printable label
+
+`/kits/[id]/label` is one card: the QR, the kit code, the kit name and the ADM
+barcode, on white with dark ink whatever the viewer's theme, because it is
+going to paper. The application chrome is `print:hidden` (the shell header
+included), so what leaves the printer is the card. It is not a label designer,
+and deliberately so.
+
+### 19.3 Photo evidence
+
+Photos are optional evidence on an inspection, stored as `Attachment` rows of
+kind INSPECTION_PHOTO against the inspection they were taken during - so a
+handover's photos belong to the handover for good, and a return adds its own
+without touching, replacing or re-parenting them. No migration was needed: the
+Phase 1 schema already had the model, the kinds and the storage columns.
+
+Nothing about them is required. The handover and return verdicts never look at
+photos: an engineer who photographs nothing completes either workflow, and one
+who photographs the whole case is not slowed by a required field. The control
+is a strip of thumbnails and one small upload row inside the equipment step,
+with `capture="environment"` on the file input so a phone or tablet opens its
+camera directly. Twelve photos per inspection is the cap. Uploads are accepted
+only while the inspection is open; once it is locked the document is frozen and
+its evidence with it.
+
+The booking page shows the same photos read-only, grouped by phase, and opens
+any of them full size.
+
+### 19.4 Storage rules for uploads
+
+`server/storage/photo-store.ts` follows the signature store (AD-4) and adds
+what handling somebody's file demands:
+
+| Rule | How |
+|---|---|
+| The type is the bytes | `sniffImageType` checks magic numbers for JPEG, PNG and WebP. A PDF named `.jpg` with `Content-Type: image/jpeg` is refused; a JPEG named `.png` is stored as a JPEG |
+| Size is bounded twice | `File.size` first, then the decoded length, capped at the smaller of `MAX_UPLOAD_BYTES` and 8 MB |
+| Paths are generated, never accepted | The stored name is `<scope>-<timestamp>-<random>.<ext>` under `photos/<booking id>/`; every segment comes from the server |
+| A client filename is a label, not a path | `safeDisplayName` takes the last segment, strips control characters and anything outside `[A-Za-z0-9._-]`, drops leading dots and truncates at 120 characters. `../../../../etc/passwd` becomes `passwd` |
+| Nothing escapes the store | `readStoredFile` resolves against the store root and refuses any path that lands outside it, or that carries a null byte, even if a database row says otherwise |
+| The row records the file, not the bytes | Provider, relative path, SHA-256, size, sniffed MIME type and the display name; the image itself is never a database payload |
+| A failed insert leaves no orphan | The file is written first and removed again if the row cannot be written |
+
+### 19.5 The authorised file route (AD-6, delivered)
+
+Signatures and photos are not static files. `GET /api/files/<kind>/<id>` with
+kind `signature` or `photo`:
+
+1. rejects a kind it does not know and any id that is not 1-64 characters of
+   `[A-Za-z0-9_-]`, before touching the database - so a path can never arrive
+   as an id;
+2. requires a session (`requireAuth`), answering JSON 401 for anonymous
+   callers, 403 for a forbidden one and 503 while the database is unreachable
+   (the Phase 9 outage rule, AD-21);
+3. resolves the row and authorises the caller against the booking it hangs off:
+   `booking.read` sees any booking's files, `booking.readOwn` sees only files
+   of a booking whose editor is the caller's own editor profile;
+4. reads the bytes through `readStoredFile`, answering 410 when the row is real
+   but the file is gone - a restored database looks exactly like this;
+5. returns the stored MIME type with `X-Content-Type-Options: nosniff`,
+   `Content-Disposition: inline` with a generated filename,
+   `Cache-Control: private, no-store`, a locked-down CSP and no referrer.
+
+An unknown id and a file the caller may not see are both "not found" from
+outside, so the route never confirms that a particular id exists. Nothing in
+the response - body or headers - carries a storage path, a provider or a hash.
+
+External editors have no account, so they have no file access at all: their
+signature is captured in person on the engineer's device (AD-20).
+
+### 19.6 The kit page after a scan
+
+`/kits/[id]` opens with one panel answering what a person holding the case
+needs: the kit code and name, its status and readiness, the current booking
+with its editor, engineer, collection time and expected return, and every
+blocking or noted availability reason. Under it are the contextual actions
+`kitOperations` allows:
+
+| State | Offered |
+|---|---|
+| Available and ready | Create a booking (`booking.create`) |
+| Reserved | Open the booking |
+| Ready for handover | Open the booking, Handover (`handover.perform`) |
+| Checked out or overdue | Open the booking, Start return inspection (`return.perform`) |
+| Return inspection | Open the booking, Continue return inspection |
+| Removed from inventory | Nothing |
+
+These are shortcuts, never authority: every target page authorises the caller
+and re-checks the lifecycle itself, so following a URL that was not offered
+meets the same refusal. A kit that is free but not fit to go out offers no
+booking action, because the reservation gate would refuse it anyway.
+
+### 19.7 Tests
+
+`tests/unit/photo-store.test.ts` (11): what counts as an image and what does
+not, the type coming from the bytes rather than the client, size limits,
+hashing, filename sanitisation including traversal attempts, and the read path
+refusing to leave the store or to accept a null byte.
+
+`tests/integration/photos.test.ts` (9): a handover photo stored with its
+metadata and an audit line; a return photo stored without touching the
+handover's, which survives the return being completed; both workflows
+completing with no photos at all; non-images and oversized files refused with
+nothing written; a hostile filename becoming a harmless label and a generated
+path; evidence refused on a frozen inspection and on a return that has not
+started; the per-inspection cap; and the booking workspace carrying metadata
+with no path, hash or provider in it.
+
+`tests/integration/files.route.test.ts` (9): anonymous refused; a signature
+served to a booking reader with dull headers and no internals; photos served to
+ADMIN and VIEWER; an EDITOR reading their own booking's files and refused
+another's; an unlinked EDITOR refused; unknown ids, unknown kinds and
+path-shaped ids refused without a database read; a real row whose file is gone
+answering 410; and a signature id refused as a photo and vice versa.
+
+`tests/integration/kit-qr.test.ts` (8): the payload being one short path with
+no kit code, barcode, editor, booking, purpose or status in it and an opaque
+id; the SVG rendering at both sizes with the payload not written into it as
+text; a scan resolving by id, code (case-insensitively) and barcode; unknown,
+empty, oversized, injection-shaped and removed-kit tokens resolving to nothing;
+and the contextual actions across available, reserved, ready, checked out,
+overdue, return-inspection and removed states for ADMIN, ENGINEER, VIEWER and
+EDITOR.

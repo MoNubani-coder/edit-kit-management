@@ -185,14 +185,23 @@ the kit stays out of service with the reason on its history. Automated
 
 ---
 
-## Phase 10 — Return workflow
+## Phase 10 — Kit labels, photo evidence and file access ✅ COMPLETE
 
-New `RETURN` inspection, side-by-side handover vs return diff with differences
-highlighted, issue prompt on degradation, completion transaction returning
-assets to `AVAILABLE` except those with unresolved issues.
+Delivered on the top-navigation shell: one QR code per kit encoding only an
+opaque `/k/<kit id>` URL, shown on the kit page and on a printable case label,
+resolving through a session-and-`kit.read` route to the kit; a kit page that
+opens with where the kit stands - status, readiness, current booking, editor,
+expected return, warnings - and the contextual actions the lifecycle and the
+caller's permissions allow; optional photo evidence on open handovers and
+returns, typed by its bytes, bounded, stored under generated names and frozen
+with the document it belongs to; and the authorised file route that serves
+signatures and photos only to callers who may read the booking they belong to,
+with dull headers and no paths, providers or hashes anywhere. No in-app camera
+scanner, by decision. No migration was needed.
 
-**Test:** mark a mouse `MISSING` on return; confirm the handover inspection is
-untouched, an Issue is offered, and that asset alone stays out of `AVAILABLE`.
+**Test:** scan a printed label signed out and land on the kit after login; add
+a damage photo on a return without touching the handover's; open a photo URL
+as the wrong editor and get 403. Automated (37 tests).
 
 ---
 

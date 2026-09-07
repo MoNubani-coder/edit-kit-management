@@ -261,7 +261,7 @@ export function AppShell({ appName, tagline, todayLabel, user, sections, childre
     <div className="flex min-h-screen flex-col bg-background">
       <header
         ref={headerRef}
-        className="theme-transition sticky top-0 z-30 border-b border-nav-line bg-nav text-nav-foreground"
+        className="theme-transition sticky top-0 z-30 border-b border-nav-line bg-nav text-nav-foreground print:hidden"
       >
         <div className="mx-auto flex h-[60px] w-full max-w-[1600px] items-center gap-6 px-4 sm:px-6 lg:px-8">
           <Brand appName={appName} tagline={tagline} />

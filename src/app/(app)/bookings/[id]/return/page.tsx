@@ -10,6 +10,7 @@ import { buttonVariants } from '@/components/ui/button'
 import { IdentityPanels } from '@/features/handover/components/identity-panels'
 import { SignaturePad } from '@/features/handover/components/signature-pad'
 import { StepCard, type StepState } from '@/features/handover/components/step-card'
+import { PhotoEvidence } from '@/features/photos/components/photo-evidence'
 import { EquipmentReturnForm } from '@/features/return/components/equipment-return-form'
 import { HandoverRecap } from '@/features/return/components/handover-recap'
 import { ReturnChecklistForm } from '@/features/return/components/return-checklist-form'
@@ -20,6 +21,8 @@ import { requirePermissionForPage } from '@/server/auth/page-guards'
 import { can } from '@/server/auth/permissions'
 import { captureReturnSignatureFormAction } from '@/server/actions/return.actions'
 import { prisma } from '@/server/db/prisma'
+import { uploadReturnPhotoAction } from '@/server/actions/photos.actions'
+import { loadInspectionPhotos } from '@/server/services/photos.service'
 import { loadReturnSummary, loadReturnWorkspace } from '@/server/services/return.service'
 
 export const metadata: Metadata = { title: 'Return inspection' }
@@ -41,6 +44,7 @@ export default async function ReturnPage({ params }: { params: Promise<{ id: str
   const { booking, handover, inspection, bookingBlockers, verdict, canPerform, canComplete, completed } = workspace
   const timeZone = env.APP_TIMEZONE
   const summary = completed || inspection ? await loadReturnSummary(prisma, id) : null
+  const photos = inspection ? await loadInspectionPhotos(prisma, inspection.id) : []
 
   const problemCount = inspection
     ? inspection.lines.filter((line) => line.status === 'MISSING' || line.status === 'DAMAGED').length +
@@ -147,6 +151,17 @@ export default async function ReturnPage({ params }: { params: Promise<{ id: str
               state={equipmentState}
             >
               <EquipmentReturnForm bookingId={booking.id} lines={inspection.lines} suitcaseStatus={inspection.suitcaseStatus} generalNotes={inspection.generalNotes} disabled={!canPerform} />
+              <div className="mt-5">
+                <PhotoEvidence
+                  bookingId={booking.id}
+                  photos={photos}
+                  action={uploadReturnPhotoAction}
+                  disabled={!canPerform}
+                  timeZone={timeZone}
+                  label="Photo evidence"
+                  hint="Optional, and worth it for damage or a missing item: photograph what you found. The handover's own photos are untouched by anything recorded here."
+                />
+              </div>
             </StepCard>
 
             <StepCard step={2} id="checklist" title="Return checks" description="The booking's own return-phase checks, as they stood when the handover was taken." state={checklistState}>

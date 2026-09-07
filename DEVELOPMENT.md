@@ -2,12 +2,12 @@
 
 Running log of what exists, what to test, and what comes next.
 
-- **Current phase:** 9 of 13 — Return inspection — ✅ **complete**
+- **Current phase:** 10 of 13 — Kit labels, photo evidence and file access — ✅ **complete**
 - **Status:** verified against PostgreSQL 16.15 — six migrations applied (none
-  new in Phase 8 or 9), zero drift, 29/29 database constraint checks, 310/310
-  Vitest tests (two consecutive runs, database and numbering counters
-  unchanged), typecheck + lint clean, production build clean
-- **Last updated:** 2026-09-07 (Phase 9, after Phase 8 and the authentication redirect-loop fix)
+  new in Phases 8–10), zero drift, 29/29 database constraint checks, 347/347
+  Vitest tests (two consecutive runs, database, filesystem and numbering
+  counters unchanged), typecheck + lint clean, production build clean
+- **Last updated:** 2026-09-07 (Phase 10)
 
 ### Fix: the /login ↔ /dashboard redirect loop
 
@@ -1411,25 +1411,149 @@ window either side, and lateness is reported in whole minutes.
 
 ---
 
-## Next: Phase 10 — Issues and maintenance
+## Phase 10 — Kit labels, photo evidence and file access (complete)
 
-Phase 9 raises issues; Phase 10 works them. An issues list and detail with
-assignment, severity and status transitions (OPEN → UNDER_INVESTIGATION →
-RESOLVED → CLOSED), maintenance records opened from an issue, the asset and kit
-returning to service when the work is done, and the dashboard counts that go
-with it. The `Issue` and `MaintenanceRecord` models, their audit actions and
-the `MNT-` numbering are already in place and already used by Phase 4's
-maintenance rules and Phase 9's returns.
+One QR code per kit for the case, optional photo evidence on handovers and
+returns, the authorised file route Phase 9 left open, and a kit page that
+answers a scan at a glance. Design in
+[docs/ARCHITECTURE.md §19](docs/ARCHITECTURE.md#19-kit-labels-photo-evidence-and-file-access-phase-10).
+
+**What exists**
+
+- No migration. `Attachment` (kind INSPECTION_PHOTO, provider, path, SHA-256,
+  size, MIME, caption, links to booking and inspection) was already in the
+  Phase 1 schema, as was `MAX_UPLOAD_BYTES`.
+- One new dependency: `qrcode` (pure JavaScript, server-side SVG), with its
+  types as a dev dependency. Nothing new reaches the browser.
+- `src/server/services/qr.service.ts` - the scan path `/k/<kit id>`, the
+  request-derived origin, and the inline SVG.
+- `src/app/k/[id]/page.tsx` - where a scan lands: session and `kit.read`
+  required, then a redirect to the kit; unknown or removed kits are a 404.
+  `resolveScannedKit` also accepts a kit code or ADM barcode.
+- `src/app/(app)/kits/[id]/label/page.tsx` - the printable card, with the
+  shell hidden when printing.
+- `src/features/kits/components/` gained `kit-operations-panel.tsx` (where the
+  kit stands and what to do next), `kit-qr-panel.tsx` and `print-button.tsx`.
+  `kitOperations` in the kits service is the pure rule behind the actions.
+- `src/server/storage/photo-store.ts` - byte-sniffed type, bounded size,
+  generated names, sanitised display names, and `readStoredFile`, the one
+  read path for signatures and photos alike, which refuses to leave the store.
+- `src/server/dal/attachments.dal.ts`, `src/server/services/photos.service.ts`,
+  `src/server/actions/photos.actions.ts` - metadata reads with no paths, the
+  upload rule (open inspection only, twelve per inspection), and the two
+  actions under `handover.perform` / `return.perform`.
+- `src/server/services/files.service.ts` and
+  `src/app/api/files/[kind]/[id]/route.ts` - the authorised file route.
+- `src/features/photos/components/` - `photo-evidence.tsx` (thumbnails plus a
+  camera-first upload row inside the equipment step of both workflows) and
+  `photo-strip.tsx` (read-only, grouped by phase, on the booking page).
+- Tests: `tests/unit/photo-store.test.ts`, `tests/integration/photos.test.ts`,
+  `tests/integration/files.route.test.ts`, `tests/integration/kit-qr.test.ts`.
+
+**Verification — Phase 10 (2026-09-07)**
+
+| Check | Result |
+|---|---|
+| `npm test` run 1 (36 files) | ✅ **347 / 347** |
+| `npm test` run 2 (36 files) | ✅ **347 / 347** |
+| Phase 8 handover, Phase 9 return, auth, sign-out and boundary suites | ✅ green in both runs |
+| Database after both runs | ✅ counters unchanged (ASSET 16, MAINTENANCE 1, BOOKING 1); the live booking, handover, two signatures untouched; 0 attachments; no test rows |
+| Filesystem after both runs | ✅ exactly the two live signature files under `storage/`; no test photos, no test directories |
+| `scripts/db/verify-constraints.sql` | ✅ 29 / 29 constraint checks pass, rolled back (9c and 9d are seed-fixture assertions the two hand-created dev assets break by design) |
+| `prisma migrate status` | ✅ 6 migrations, up to date |
+| `prisma migrate diff --exit-code` | ✅ No difference detected |
+| `npm run check` | ✅ clean |
+| `npm run build` | ✅ clean; `/k/[id]`, `/kits/[id]/label` and `/api/files/[kind]/[id]` compiled |
+
+**What the 37 Phase 10 tests prove**
+
+*The label* — the payload is `/k/<opaque id>` and carries no kit code, barcode,
+editor, booking, purpose or status; the SVG renders at both sizes and does not
+spell the payload out as text; a scan resolves by id, code or barcode and
+resolves nothing for unknown, empty, oversized, injection-shaped or removed
+tokens.
+
+*The kit page* — a free, ready kit offers a booking to someone who may book and
+nothing to a viewer or editor; a reserved kit offers its booking; ready for
+handover adds the handover for engineers and admins only; out or overdue adds
+the return; a part-recorded return is continued; a removed kit offers nothing;
+a kit that is free but not fit to go out offers no booking.
+
+*Uploads* — JPEG, PNG and WebP by their bytes; a PDF in a `.jpg` coat refused;
+size bounded; hostile filenames reduced to labels and never used in a path;
+the read path refusing to leave the store or accept a null byte; handover and
+return photos each staying with their own inspection, the handover's surviving
+the return; both workflows completing with no photos; nothing written on a
+refusal; the frozen-inspection and not-started refusals; the cap.
+
+*The file route* — anonymous 401; a booking reader served with `nosniff`,
+`private, no-store`, an inline generated filename and no path, provider or
+hash anywhere; ADMIN and VIEWER served; an EDITOR served their own booking's
+files and refused another's; unknown ids, unknown kinds and path-shaped ids
+refused before any database read; a real row with a missing file answering
+410; a signature id refused as a photo and vice versa.
+
+**Decisions taken in Phase 10**
+
+| Decision | Reason |
+|---|---|
+| One QR per kit, encoding `/k/<kit id>` only | A case label is public to anyone near the case; an opaque id is useless without a login, and it survives a renumbering |
+| No in-app camera scanner | Every phone's camera app already opens a URL, with no permission prompt or client library; a scanner is a separate decision if ever wanted |
+| Scan route requires a session and `kit.read` | An anonymous scan goes to login and comes back; a stranger with the case learns nothing |
+| The origin comes from the request | No new environment variable to keep in step across localhost, LAN and domain |
+| Photos are optional, capped at twelve, and only while the inspection is open | Evidence is for disputes, not a checklist; a frozen document keeps its evidence frozen |
+| The type is sniffed from the bytes | Client `Content-Type` and extensions are claims |
+| Stored names are generated; client names are labels | Nothing the client sends becomes part of a path |
+| One read path with a containment check | A tampered row cannot reach outside the store |
+| Files are served through `/api/files/<kind>/<id>` with booking-scoped authorisation | Signatures and photos are booking records, so booking permissions decide |
+| Unknown and forbidden ids both look like "not found" from outside | The route never confirms which ids exist |
+| Missing files answer 410, not 500 | A restored database is an operational state, not a bug |
+
+**Manual browser checks worth doing**
+
+- [ ] Kit page: the "Where this kit stands" panel shows code, name, status,
+  readiness, the current booking, editor, engineer, collection and expected
+  return, and the blocking / noted reasons.
+- [ ] Overview tab: the case label panel shows the QR and its URL, and
+  *Printable label* opens the card; Print shows the card alone.
+- [ ] Scan the printed code with a phone: signed out it lands on login and then
+  on the kit; signed in it opens the kit directly.
+- [ ] Handover: add a photo from the camera in the equipment step; it appears as
+  a thumbnail and opens full size; the handover completes with or without it.
+- [ ] Return: add a damage photo; the handover's photos are unchanged; the
+  booking page shows both groups.
+- [ ] Open a photo URL signed out → JSON 401. As the seeded EDITOR, open a
+  photo from someone else's booking → 403.
+- [ ] Upload a PDF renamed `.jpg` → refused with a sentence; upload a 9 MB
+  image → refused.
+- [ ] Light and dark themes; the label card stays white; 768 px width: the
+  panel stacks and the camera button stays thumb-sized.
+
+---
+
+## Next: Phase 11 — Issues and maintenance
+
+Phase 9 raises issues and Phase 10 lets evidence be attached to inspections;
+Phase 11 works the issues: an issues list and detail with assignment, severity
+and status transitions (OPEN → UNDER_INVESTIGATION → RESOLVED → CLOSED),
+maintenance records opened from an issue, the asset and kit returning to
+service when the work is done, issue photos through the same file route, and
+the dashboard counts that go with it. The models, audit actions and `MNT-`
+numbering are already in place.
 
 **Open decisions carried forward**
 
 - Whether ENGINEER may manage kits (`kit.manage`) — still ADMIN only.
-- Serving signature images and the handover / return PDFs through an authorised
-  file route (AD-6).
+- The handover / return PDF, now that its signatures and photos are served
+  through an authorised route.
 - Whether the overdue sweep is needed for notifications now that OVERDUE is
   derived at read time.
 - Rate-limit store for multi-instance deployment.
 - The soft-deleted smoke accounts and the hard-delete-vs-audit question for
   users who have signed in.
-- Two constraint-suite checks (9c, 9d) assert the pristine seed shape and now
-  fail against hand-created dev data; decide whether to relax them or reseed.
+- Two constraint-suite checks (9c, 9d) assert the pristine seed shape and fail
+  against hand-created dev data; relax them or reseed.
+- `npm audit` reports advisories in the Prisma CLI's own dependency tree
+  (`deepmerge-ts`, `mysql2`), present before Phase 10 and unrelated to
+  `qrcode`; the suggested fix downgrades Prisma, so it is left for a deliberate
+  upgrade.

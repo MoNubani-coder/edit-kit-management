@@ -14,11 +14,14 @@ import { HandoverSummaryPanel } from '@/features/handover/components/handover-su
 import { IdentityPanels } from '@/features/handover/components/identity-panels'
 import { SignaturePad } from '@/features/handover/components/signature-pad'
 import { StepCard, type StepState } from '@/features/handover/components/step-card'
+import { PhotoEvidence } from '@/features/photos/components/photo-evidence'
 import { env } from '@/lib/env'
 import { requirePermissionForPage } from '@/server/auth/page-guards'
 import { can } from '@/server/auth/permissions'
 import { prisma } from '@/server/db/prisma'
+import { uploadHandoverPhotoAction } from '@/server/actions/photos.actions'
 import { loadHandoverSummary, loadHandoverWorkspace } from '@/server/services/handover.service'
+import { loadInspectionPhotos } from '@/server/services/photos.service'
 
 export const metadata: Metadata = { title: 'Handover' }
 
@@ -39,6 +42,7 @@ export default async function HandoverPage({ params }: { params: Promise<{ id: s
   const { booking, inspection, bookingBlockers, verdict, canPerform, canComplete, completed } = workspace
   const timeZone = env.APP_TIMEZONE
   const summary = completed ? await loadHandoverSummary(prisma, id) : null
+  const photos = inspection ? await loadInspectionPhotos(prisma, inspection.id) : []
 
   const equipmentState: StepState | undefined = inspection
     ? verdict?.blockers.some((blocker) => blocker.code === 'equipment')
@@ -116,6 +120,17 @@ export default async function HandoverPage({ params }: { params: Promise<{ id: s
           <>
             <StepCard step={1} id="equipment" title="Equipment" description={`${inspection.lines.length} ${inspection.lines.length === 1 ? 'item' : 'items'} snapshotted at ${inspection.startedByName ? `start by ${inspection.startedByName}` : 'start'}. Record the condition of each item and its accessories as they go into the case.`} state={equipmentState}>
               <EquipmentForm bookingId={booking.id} lines={inspection.lines} suitcaseStatus={inspection.suitcaseStatus} generalNotes={inspection.generalNotes} disabled={!canPerform} />
+              <div className="mt-5">
+                <PhotoEvidence
+                  bookingId={booking.id}
+                  photos={photos}
+                  action={uploadHandoverPhotoAction}
+                  disabled={!canPerform}
+                  timeZone={timeZone}
+                  label="Photo evidence"
+                  hint="Optional. A shot of the packed case or a serial plate settles most later questions. Nothing here is required to complete the handover."
+                />
+              </div>
             </StepCard>
 
             <StepCard step={2} id="checklist" title="Checklist and software" description="Required checks must pass or be marked not applicable; required applications must be installed." state={checklistState}>

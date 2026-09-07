@@ -1,6 +1,6 @@
 import 'server-only'
 
-import { AssetStatus, AuditAction, KitStatus, type Prisma } from '@prisma/client'
+import { AssetStatus, AuditAction, BookingStatus, KitStatus, type Prisma } from '@prisma/client'
 
 import type {
   CreateKitInput,
@@ -31,6 +31,7 @@ import {
   getKitDetail,
   getKitHistory,
   getKitLifecycleContext,
+  findKitByScan,
   getKitMembership,
   type KitAvailabilityFacts,
   type KitDetail,
@@ -799,6 +800,70 @@ export async function loadKitWorkspace(db: Db, actor: Actor, id: string): Promis
     membersBlocker: kitAcceptsMembersBlocker(lifecycle),
     memberRemovalBlockers: Object.fromEntries(kit.members.map((member) => [member.kitAssetId, memberRemovalBlocker(lifecycle, member.status)])),
   }
+}
+
+/** Resolves a scanned or typed kit label. Null when it matches no live kit. */
+export async function resolveScannedKit(db: Db, token: string): Promise<{ id: string; kitCode: string } | null> {
+  return findKitByScan(db, token)
+}
+
+export type KitOperationKey = 'book' | 'open-booking' | 'handover' | 'return'
+
+export interface KitOperation {
+  key: KitOperationKey
+  label: string
+  href: string
+  primary: boolean
+  /** Why this is the next useful thing to do with the kit. */
+  detail: string
+}
+
+/**
+ * What an engineer standing in front of the case can usefully do next, given
+ * the kit's lifecycle and their own permissions.
+ *
+ * Every action is a link to a page that authorises and re-checks the lifecycle
+ * itself, so this list is a convenience, never a permission: an actor who
+ * follows a URL they were not offered still meets the same server checks.
+ */
+export function kitOperations(input: {
+  kit: { id: string; status: KitStatus; deleted: boolean };
+  availability: KitAvailability;
+  liveBooking: { id: string; bookingNumber: string; status: BookingStatus } | null;
+  actor: Actor;
+}): KitOperation[] {
+  const { kit, availability, liveBooking, actor } = input
+  if (kit.deleted) return []
+
+  const operations: KitOperation[] = []
+  const canSeeBooking = can(actor, 'booking.read') || can(actor, 'booking.readOwn')
+
+  if (liveBooking) {
+    if (canSeeBooking) {
+      operations.push({
+        key: 'open-booking',
+        label: `Open ${liveBooking.bookingNumber}`,
+        href: `/bookings/${liveBooking.id}`,
+        primary: false,
+        detail: 'The booking this kit is committed to right now.',
+      })
+    }
+    if (liveBooking.status === BookingStatus.READY_FOR_HANDOVER && can(actor, 'handover.perform')) {
+      operations.push({ key: 'handover', label: 'Handover', href: `/bookings/${liveBooking.id}/handover`, primary: true, detail: 'The kit is set aside and ready to hand to the editor.' })
+    }
+    if ((liveBooking.status === BookingStatus.CHECKED_OUT || liveBooking.status === BookingStatus.OVERDUE) && can(actor, 'return.perform')) {
+      operations.push({ key: 'return', label: 'Start return inspection', href: `/bookings/${liveBooking.id}/return`, primary: true, detail: 'The kit is out; open the return when it is back on the bench.' })
+    }
+    if (liveBooking.status === BookingStatus.RETURN_INSPECTION && can(actor, 'return.perform')) {
+      operations.push({ key: 'return', label: 'Continue return inspection', href: `/bookings/${liveBooking.id}/return`, primary: true, detail: 'A return is part-recorded for this kit.' })
+    }
+    return operations
+  }
+
+  if (kit.status === KitStatus.AVAILABLE && availability.available && can(actor, 'booking.create')) {
+    operations.push({ key: 'book', label: 'Create a booking', href: `/bookings/new?kitId=${kit.id}`, primary: true, detail: 'The kit is ready and free; book it for an editor.' })
+  }
+  return operations
 }
 
 export interface AssetCandidateRow extends AssetCandidate {
