@@ -1,4 +1,4 @@
-import { Boxes, ClipboardCheck, PackageCheck, Pencil, UserRound } from 'lucide-react'
+import { Boxes, ClipboardCheck, FileText, PackageCheck, Pencil, UserRound } from 'lucide-react'
 import Link from 'next/link'
 import type { ReactNode } from 'react'
 
@@ -204,6 +204,42 @@ export function BookingOverview({ workspace, timeZone, now }: { workspace: Booki
       ) : null}
 
       {workspace.handover ? <HandoverSummaryPanel summary={workspace.handover} collectionDate={booking.collectionDate} timeZone={timeZone} /> : null}
+
+      {workspace.documents.length > 0 ? (
+        <section className="theme-transition rounded-panel border border-line bg-panel">
+          <header className="flex flex-wrap items-center justify-between gap-3 border-b border-line bg-panel-header px-5 py-3">
+            <div>
+              <h2 className="flex items-center gap-2 font-display text-[15px] font-semibold text-foreground">
+                <FileText aria-hidden className="h-4 w-4 text-accent-foreground" />
+                Signed documents
+              </h2>
+              <p className="mt-0.5 text-xs text-muted">Frozen when each inspection completed. Later changes to the kit or its equipment cannot alter them.</p>
+            </div>
+          </header>
+          <div className="flex flex-wrap items-center gap-3 px-5 py-4">
+            {workspace.documents.includes('handover') ? (
+              <>
+                <Link href={`/bookings/${booking.id}/document/handover`} className={buttonVariants({ variant: 'secondary', size: 'sm' })}>
+                  Handover record
+                </Link>
+                <Link href={`/api/documents/handover/${booking.id}`} prefetch={false} className="text-sm text-accent-foreground hover:underline">
+                  PDF
+                </Link>
+              </>
+            ) : null}
+            {workspace.documents.includes('return') ? (
+              <>
+                <Link href={`/bookings/${booking.id}/document/return`} className={buttonVariants({ variant: 'secondary', size: 'sm' })}>
+                  Return record
+                </Link>
+                <Link href={`/api/documents/return/${booking.id}`} prefetch={false} className="text-sm text-accent-foreground hover:underline">
+                  PDF
+                </Link>
+              </>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
 
       {workspace.photos.length > 0 ? <PhotoStrip photos={workspace.photos} timeZone={timeZone} /> : null}
 

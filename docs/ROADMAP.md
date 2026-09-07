@@ -226,13 +226,25 @@ fact and never moves equipment (AD-24). Automated (25 tests).
 
 ---
 
-## Phase 12 — Reports and PDF
+## Phase 12 — Reports and PDF ✅ COMPLETE
 
-Report query layer (AD-5) + the ten reports; handover and return PDFs rendered
-from `documentSnapshot` (AD-6); CSV export as the first extra renderer.
+Delivered as the report query layer (AD-5) with eleven reports in three groups
+— operations (checked out, upcoming returns, overdue), history (bookings, kit
+utilisation, editor history, completed documents) and equipment (missing and
+damaged, issues, inventory status, maintenance). Filters, sorting and paging are
+server-side and every state is a URL, so a report can be bookmarked, shared and
+exported exactly as seen. CSV is the first extra renderer over the same
+`{ columns, rows }` shape, written with a UTF-8 byte-order mark, CRLF and a
+spreadsheet formula guard. Handover and return documents render from the frozen
+`documentSnapshot` (AD-6) as a printable sheet and as a PDF drawn with
+`pdf-lib`, with the signature images embedded. A report is authorised twice —
+the area plus the data it reads — while a document is authorised as its
+booking's own record, which is how an internal editor reads what they signed
+(AD-25). No migration was needed.
 
 **Test:** regenerate a handover PDF *after* renaming the kit and swapping an
-asset's serial number — the PDF must still show what was signed.
+asset's serial number — the PDF must still show what was signed. Automated
+(25 tests: 15 reports, 10 documents).
 
 ---
 

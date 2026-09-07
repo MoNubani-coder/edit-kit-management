@@ -2,12 +2,12 @@
 
 Running log of what exists, what to test, and what comes next.
 
-- **Current phase:** 11 of 13 — Issue management — ✅ **complete**
+- **Current phase:** 12 of 13 — Reports and PDF — ✅ **complete**
 - **Status:** verified against PostgreSQL 16.15 — six migrations applied (none
-  new in Phases 8–11), zero drift, 29/29 database constraint checks, 372/372
-  Vitest tests (two consecutive runs, database, filesystem and numbering
+  new in Phases 8–12), zero drift, 29 database constraint checks passing,
+  397/397 Vitest tests (two consecutive runs, database, filesystem and numbering
   counters unchanged), typecheck + lint clean, production build clean
-- **Last updated:** 2026-09-07 (Phase 11)
+- **Last updated:** 2026-09-07 (Phase 12)
 
 ### Fix: the /login ↔ /dashboard redirect loop
 
@@ -1649,20 +1649,140 @@ and issue photos not served as inspection photos.
 
 ---
 
-## Next: Phase 12 — Reports and PDF
+## Phase 12 — Reports and PDF (complete)
 
-The report query layer (AD-5) and the ten reports, the handover and return PDFs
-rendered from the frozen `documentSnapshot` (AD-6), and CSV as the first extra
-renderer. `/reports` is still the placeholder that phase replaces. The
-signature and photo routes it needs are already in place from Phase 10, and
-the documents it renders have been frozen since Phases 8 and 9.
+Eleven reports over one query layer, and the signed handover and return as a
+printable sheet and a PDF drawn from the frozen snapshot. Design in
+[docs/ARCHITECTURE.md §21](docs/ARCHITECTURE.md#21-reports-and-documents-phase-12).
+
+**What exists**
+
+- No migration. Everything read here has been in the schema since Phase 1, and
+  the documents have been frozen into `Inspection.documentSnapshot` since
+  Phases 8 and 9.
+- One dependency added: `pdf-lib` (pure JavaScript, no Chromium, no font files
+  to bundle).
+- `src/server/reports/types.ts` - `ColumnDef`, `ReportRow`, `ReportResult`,
+  `ReportParams`, `ReportScope`, `ReportDefinition`, and `paginate`.
+- `src/server/reports/filters.ts` - `parseReportQuery` (drops a filter the
+  report does not offer; page size 5–200, default 50), `toReportParams` (a
+  local `YYYY-MM-DD` becomes an instant in the business time zone, `to`
+  inclusive of the whole local day), `reportHref`.
+- `src/server/reports/definitions.ts` - the eleven reports. `bookingWhere`
+  applies the scope, the kit and editor filters and the free-text search; every
+  derived number (days out, days late, days to resolve, days open) is computed
+  here, and a `Decimal` cost becomes a plain number.
+- `src/server/reports/registry.ts` - `findReport`, `mayRunReport`,
+  `reportsFor`, `groupedReportsFor`.
+- `src/server/reports/renderers/csv.ts` - UTF-8 byte-order mark, CRLF, RFC 4180
+  quoting, and a leading `=`, `+`, `-` or `@` prefixed with an apostrophe.
+- `src/server/services/reports.service.ts` - `scopeFor`, `runReport` (an
+  unknown id refused exactly like a forbidden one), `loadReportPage`,
+  `loadReportCatalogue`, `runReportCsv`.
+- `src/server/documents/snapshot.ts` - `readDocument` parsing a stored snapshot
+  defensively into one view model; `documentTitle`, `inspectionTypeFor`.
+- `src/server/documents/pdf.ts` - `renderDocumentPdf` and the `Sheet` layout
+  cursor, WinAnsi-safe text, signature PNGs embedded.
+- `src/server/services/documents.service.ts` - `loadDocument`
+  (`ok | not-found | forbidden | not-ready`), `mayRead`, `availableDocuments`,
+  `signatureImages`, `renderDocument`.
+- Pages: `/reports` (was a placeholder) is now the catalogue grouped in three;
+  `/reports/[report]` is any report with its filters, paging and export;
+  `/bookings/[id]/document/[kind]` is the printable sheet.
+- Routes: `/api/reports/[report]` (CSV, attachment) and
+  `/api/documents/[kind]/[id]` (PDF, inline, `private, no-store`, `nosniff`,
+  409 when nothing is signed yet).
+- `src/features/reports/` - the table and the filter bar;
+  `src/features/documents/` - the sheet.
+- Links: the booking workspace gained a "Signed documents" panel from
+  `availableDocuments`, opening the sheet or the PDF.
+
+**Verification — Phase 12 (2026-09-07)**
+
+| Check | Result |
+|---|---|
+| `npm test` run 1 (41 files) | ✅ **397 / 397** |
+| `npm test` run 2 (41 files) | ✅ **397 / 397** |
+| Phases 1–11 suites | ✅ all 372 green, unchanged |
+| Database after both runs | ✅ counters unchanged (ASSET 16, MAINTENANCE 1, BOOKING 1); the live booking, its handover and two signatures untouched; 0 issues, 0 attachments |
+| Filesystem after both runs | ✅ the two live signature files only; no test PDFs, no test directories |
+| `scripts/db/verify-constraints.sql` | ✅ 29 / 31 pass, rolled back (9c and 9d are seed-fixture assertions the two hand-created dev assets break by design, unchanged since Phase 10) |
+| `prisma migrate status` | ✅ 6 migrations, up to date |
+| `prisma migrate diff --exit-code` | ✅ No difference detected |
+| `npm run check` | ✅ clean, no warnings |
+| `npm run build` | ✅ clean; `/reports`, `/reports/[report]`, `/bookings/[id]/document/[kind]`, `/api/reports/[report]` and `/api/documents/[kind]/[id]` compiled |
+
+**What the 25 Phase 12 tests prove**
+
+*The catalogue and who may run what* — an administrator and an engineer see all
+eleven reports, a viewer sees only those whose data they may read, and an
+editor cannot reach the area at all; a report the caller may not read is
+refused, and so is an unknown id, so ids cannot be enumerated. A run scoped to
+one editor profile returns only that editor's rows.
+
+*The reports themselves* — what is out, with the editor's mobile and the days
+it has been out; upcoming returns and overdue separating on the same booking as
+its expected return moves; booking history with punctuality and a server-side
+status filter; kit utilisation and editor history counted from the same
+bookings; completed documents with their counts and a document-type filter;
+missing and damaged equipment naming the issue that raised it; the inventory
+with kit membership, out-now and open issues; maintenance carrying a `Decimal`
+cost as a number.
+
+*Filters, paging and CSV* — paging is server-side and the page size is clamped
+rather than trusted; a date filter is read in the business time zone and a
+malformed one is dropped rather than half-applied; the CSV header matches the
+table's columns and the file carries a byte-order mark and CRLF; a value
+starting `=` is written as text, not a formula.
+
+*The documents* — the handover carries everything from the snapshot and no
+storage path, hash or audit payload; the return shows what went out beside what
+came back with its punctuality; **the roadmap's test** — renaming the kit and
+swapping an asset's serial number, after which the sheet and a freshly
+generated PDF still show what was signed; a partial snapshot renders with
+blanks instead of throwing; both PDFs render with the signatures embedded, and
+one still renders when the image files are gone.
+
+*Reading a document* — the route serves an administrator, an engineer and a
+viewer with dull headers; anonymous is 401; an editor reads their own booking's
+document and is refused another's; nothing signed yet is 409, a missing booking
+404, an unknown kind 404.
+
+**Manual checks — Phase 12**
+
+- [ ] `/reports` lists eleven reports in three groups; each opens.
+- [ ] Currently checked out shows the live booking, its editor and days out.
+- [ ] Set a date filter, page, then reload: the URL alone restores the view.
+- [ ] Export CSV, open it in Excel: the columns match the table and the
+  characters are right.
+- [ ] From the live booking: "Signed documents" → the handover sheet; Print
+  shows the sheet without the application chrome; Download PDF opens the PDF
+  with the signatures in it.
+- [ ] Rename the kit, then reopen the document: it still says what was signed.
+- [ ] As VIEWER: `/reports` opens but the issues, maintenance and editor
+  reports are absent, and typing one's URL is 403. As the seeded EDITOR:
+  `/reports` is 403, but their own booking's document opens.
+- [ ] Light and dark themes; the sheet stays white ground and dark ink in both.
+- [ ] 768 px width: the filter bar stacks and the table scrolls in its own
+  container.
+
+---
+
+## Next: Phase 13 — Testing and deployment
+
+The last roadmap phase: Playwright end-to-end over handover → return,
+Testcontainers for the database constraints the SQL suite checks by hand, the
+production Docker build, and a backup and restore runbook. Vitest unit and
+integration coverage has grown with every phase and now stands at 397 tests
+across 41 files, so Phase 13 is mostly the two layers Vitest cannot reach plus
+the deployment story.
 
 **Open decisions carried forward**
 
 - Whether ENGINEER may manage kits (`kit.manage`) — still ADMIN only.
-- The maintenance workflow itself: records are read-only, and an issue can
-  point at one, but nothing creates or advances them yet. Not in the remaining
-  roadmap phases; worth a decision after Phase 12.
+- The maintenance workflow itself: records are read-only and now appear in a
+  report, an issue can point at one, but nothing creates or advances them yet.
+  Not in the remaining roadmap phase; worth a decision now.
 - Whether the overdue sweep is needed for notifications now that OVERDUE is
   derived at read time.
 - Rate-limit store for multi-instance deployment.
@@ -1672,3 +1792,5 @@ the documents it renders have been frozen since Phases 8 and 9.
   against hand-created dev data; relax them or reseed.
 - `npm audit` advisories in the Prisma CLI's own dependency tree, present since
   before Phase 10; the suggested fix downgrades Prisma.
+- Whether reports need an Excel renderer beside CSV, and whether any report
+  should be schedulable rather than pulled by hand.

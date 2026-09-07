@@ -482,16 +482,17 @@ local driver while new ones go to Blob.
 ### AD-5 — Reporting reads from a query layer, not from pages
 
 Each report is a function in `src/server/reports/` returning
-`{ columns: ColumnDef[], rows: Record<string, unknown>[] }`. The HTML table, the
-future CSV writer and the future Excel writer are three renderers over that one
-shape. Adding "export to Excel" becomes one renderer, not ten report rewrites.
+`{ columns: ColumnDef[], rows: Record<string, unknown>[] }`. The HTML table and the
+CSV writer are two renderers over that one shape, and a future Excel writer
+would be a third. Adding a format becomes one renderer, not eleven report
+rewrites. Delivered in Phase 12 (§21).
 
 ### AD-6 — PDF generated from `documentSnapshot`, not from live joins
 
 When an inspection completes, the fully-resolved document is serialised into
 `Inspection.documentSnapshot`. The PDF renderer reads only that. A handover PDF
-regenerated in three years is byte-identical to the one signed, even if the kit
-has since been dismantled.
+regenerated in three years says exactly what was signed, even if the kit has
+since been renamed or dismantled. Delivered in Phase 12 (§21.5).
 
 ### AD-7 — Server Actions are treated as public endpoints
 
@@ -801,6 +802,36 @@ service stays a deliberate act - the maintenance workflow's job - and a
 resolved issue on a missing asset is a state the system is happy to hold, which
 is exactly what the tests assert.
 
+### AD-25 — A report is authorised twice; a document belongs to its booking
+
+**Decision.** Reading a report needs two permissions, not one: `report.read`
+opens the reports area, and a report that reads issues, maintenance or editor
+records additionally needs the permission for that data. A booking-shaped
+report is also scoped in the query - a caller who may see only their own
+bookings gets their own rows, and a caller with no booking visibility gets an
+impossible scope rather than a full table. A document (`/bookings/[id]/document/[kind]`
+and its PDF) is authorised as the booking's own record instead, so an internal
+editor can open what they signed without holding `report.read` at all.
+
+**Why.** A report is a new way to read data that already has an owner, and the
+report layer must not become a side door around the permission that guards it:
+a viewer who cannot open `/issues` should not read the same rows by typing an
+issues report's URL. Scoping rather than refusing is the safer default at the
+query layer - a page can forget to check, a `where` clause cannot - and it is
+what lets a report be offered to a narrower audience later without rewriting
+it. Documents pull the other way. The signed handover is the editor's own
+receipt, and gating it behind a reporting permission would either lock them out
+of their own record or hand them everyone else's.
+
+**Consequence.** `mayRunReport` requires `report.read` plus every `alsoNeeds`
+entry; an unknown report id is refused exactly like a forbidden one, so ids
+cannot be enumerated. `scopeFor` derives the scope from the actor's booking
+permission and every booking-shaped definition applies it. Documents check the
+booking: `booking.read`, or `booking.readOwn` matched against the actor's own
+editor profile. External editors, who have no login (AD-20), get the paper copy
+in person. Today no role reaches a report through the narrowing path, but the
+narrowing lives in the query rather than in the page that calls it.
+
 ## 6. Folder structure
 
 ```
@@ -913,6 +944,8 @@ edit-kit-management/
 │  │  │  ├─ files.service.ts        # Phase 10: booking-scoped authorisation for signature / photo bytes
 │  │  │  ├─ qr.service.ts           # Phase 10: the kit scan path and inline SVG
 │  │  │  ├─ issues.service.ts       # Phase 11: the issue lifecycle, reporting, assignment
+│  │  │  ├─ reports.service.ts      # Phase 12: the catalogue, the scope, running a report, CSV
+│  │  │  ├─ documents.service.ts    # Phase 12: reading a frozen document and rendering its PDF
 │  │  │  ├─ errors.ts               # DomainError + unique-violation mapping
 │  │  │  ├─ booking.service.ts
 │  │  │  ├─ handover.service.ts
@@ -921,8 +954,15 @@ edit-kit-management/
 │  │  │  ├─ maintenance.service.ts
 │  │  │  ├─ audit.service.ts
 │  │  │  └─ numbering.service.ts
-│  │  ├─ reports/                   # report definitions + renderers
-│  │  ├─ pdf/                       # document renderer
+│  │  ├─ reports/                   # Phase 12: the query layer (AD-5)
+│  │  │  ├─ types.ts                #   ColumnDef, ReportParams, ReportDefinition
+│  │  │  ├─ filters.ts              #   URL → typed params, once, for every report
+│  │  │  ├─ definitions.ts          #   the eleven reports
+│  │  │  ├─ registry.ts             #   the catalogue and who may run what
+│  │  │  └─ renderers/csv.ts        #   the first extra renderer (BOM, CRLF, formula guard)
+│  │  ├─ documents/                 # Phase 12: the frozen document (AD-6)
+│  │  │  ├─ snapshot.ts             #   defensive read of Inspection.documentSnapshot
+│  │  │  └─ pdf.ts                  #   pdf-lib renderer, signatures embedded
 │  │  └─ storage/                   # Phase 8: signature-store; Phase 10: photo-store + the one contained read path; Azure later
 │  │
 │  ├─ lib/
@@ -2796,3 +2836,156 @@ served to issue readers with dull headers and no internals; anonymous 401 and a
 VIEWER refused an equipment-only photo; the booking side reading a photo that
 came from their booking, and another editor refused; and issue photos not being
 served as inspection photos.
+
+---
+
+## 21. Reports and documents (Phase 12)
+
+### 21.1 The report query layer (AD-5, delivered)
+
+Every report is a function returning `{ columns, rows }`. The HTML table and
+the CSV writer are two renderers over that one shape, which is why adding a
+format is one file rather than eleven rewrites - and why adding a report needs
+no page work at all.
+
+```
+src/server/reports/
+  types.ts              ColumnDef, ReportRow, ReportParams, ReportDefinition
+  filters.ts            URL -> typed params, once, for every report
+  definitions.ts        the eleven reports
+  registry.ts           the catalogue and who may run what
+  renderers/csv.ts      the first extra renderer
+```
+
+Two rules hold across the definitions. Nothing is computed in a renderer: if a
+report says "3 days late" the number is worked out in the query layer, so the
+table, the CSV and any future format agree. And rows carry plain values only -
+strings, numbers, dates, booleans, null - so a `Decimal` cost becomes a number
+and no Prisma object can leak a field nobody declared. A column has to be
+declared to appear.
+
+### 21.2 The eleven reports
+
+| Group | Report | Answers |
+|---|---|---|
+| Operations | Currently checked out | What is out, with whom, on what number, how many days out, and whether it is late |
+| Operations | Upcoming returns | What is coming back and in how many hours |
+| Operations | Overdue bookings | What is late and by how long |
+| History | Booking history | Every booking in a window, how it ended, and whether it came back late |
+| History | Kit utilisation | Per kit: times out, days out, late returns, when it was last used |
+| History | Editor booking history | Per editor: bookings, out now, late returns, last booking |
+| History | Handover and return records | Every completed document, its counts, its signatures and the issues it raised |
+| Equipment | Missing and damaged equipment | What is out of service, since when, on which booking, and the open issue |
+| Equipment | Issues | Problems with severity, status, and days to resolve |
+| Equipment | Equipment status | The whole inventory: status, kit, out now, in maintenance, open issues |
+| Equipment | Maintenance records | Records with state, vendor, cost and days open |
+
+### 21.3 Filters and paging
+
+Filters are declared per report and parsed once by `filters.ts`: free text, a
+`[from, to)` window, status, severity, kit and editor. A filter a report does
+not declare is dropped rather than half-applied, so a URL cannot smuggle a
+constraint into a query that does not expect one.
+
+Dates arrive as `YYYY-MM-DD` from a date input and are read in the business
+time zone: "from 10 September" is the whole of that local day, and `to` is
+inclusive to the person typing it and exclusive to the query - the same
+half-open convention as the booking window, so the two never disagree at a
+boundary. Paging is server-side, 50 rows by default, 5 to 200 permitted, and
+anything outside that falls back rather than failing. Every state is a URL, so
+a report can be bookmarked, shared, and exported exactly as seen.
+
+### 21.4 CSV
+
+`renderers/csv.ts` writes a UTF-8 byte-order mark and CRLF line endings,
+because that is what Excel on Windows needs to read an Arabic name correctly
+and what RFC 4180 says. Fields are quoted when they contain a quote, a comma, a
+line break or edge whitespace, and a leading `=`, `+`, `-` or `@` is prefixed
+with an apostrophe so a spreadsheet treats it as text rather than a formula.
+The export carries every declared column - the table hides `secondary` ones on
+a narrow screen, an export should not.
+
+### 21.5 Documents from the frozen snapshot (AD-6, delivered)
+
+The handover and return documents render from `Inspection.documentSnapshot` and
+nothing else. No live joins, no current kit contents, no current serial
+numbers. The phase's own test in the roadmap is exactly this: rename the kit,
+swap an asset's serial number, regenerate the handover - and it still shows
+what was signed.
+
+`documents/snapshot.ts` reads a stored snapshot into one view model, parsing
+defensively: every field goes through a narrowing helper, so an older or
+partial shape renders with blanks instead of throwing. `documents/pdf.ts`
+draws it with `pdf-lib` - chosen over a headless browser because there is no
+Chromium to install and no font files to bundle, and it embeds the signature
+PNGs so the file is self-contained, which is the point of a document that may
+be produced in a dispute years later. A missing image is skipped and the box
+reads "(signature on file)": who signed and when lives in the snapshot either
+way.
+
+Two surfaces over the same model:
+
+| Surface | What it is for |
+|---|---|
+| `/bookings/[id]/document/[kind]` | The record on screen, white ground whatever the theme, chrome hidden when printing, with Print and Download PDF |
+| `/api/documents/[kind]/[id]` | The PDF itself, inline, `private, no-store`, `nosniff` |
+
+A document contains the booking number, kit, editor with mobile and staff ID,
+both engineers, collection and expected return (and actual return with
+early / on time / late for a return), every item with make, model, serial and
+condition, its accessories, the checks, the software, the notes, the problems
+recorded, and the signatures. It contains no storage path, no hash, and no
+audit payload.
+
+### 21.6 Who may read what
+
+Reports and documents are authorised differently, on purpose.
+
+| | Reports area | A booking's document |
+|---|---|---|
+| ADMIN | ✓ all eleven | ✓ any booking |
+| ENGINEER | ✓ all eleven | ✓ any booking |
+| VIEWER | ✓ `report.read`, minus reports needing `issue.read` / `maintenance.read` / `editor.read` | ✓ any booking (`booking.read`) |
+| EDITOR | ✗ - holds no `report.read` | ✓ **their own booking only** (`booking.readOwn`) |
+
+`report.read` opens the area; a report may additionally require the permission
+for the data it reads, so a viewer who cannot see issues does not get an issues
+report by typing its URL. An unknown report id is refused exactly like a
+forbidden one, so ids cannot be enumerated. Documents are the booking's, which
+is how an internal editor gets their own signed record while never seeing
+anyone else's - and external editors, having no account, get the paper copy
+handed to them in person (AD-20).
+
+`scopeFor` is the third piece: a caller who holds only `booking.readOwn` would
+have every booking-shaped report narrowed to their own editor profile rather
+than refused, and one with no booking visibility at all gets an impossible
+scope so nothing leaks even if such a report were somehow offered. In today's
+matrix no role reaches a report through that path, but the narrowing is in the
+query, not in the page that calls it.
+
+### 21.7 Tests
+
+`tests/integration/reports.test.ts` (15): the catalogue per role and a refusal
+for a report the caller may not read, including an unknown id; the reports area
+closed to an editor while a scoped run still returns only their rows; what is
+checked out with the editor's mobile and days out; due-returns and overdue
+separating on the same booking as its expected return moves; booking history
+with punctuality and a server-side status filter; kit utilisation and editor
+history counted from the same bookings; the completed-documents report with its
+counts and a document-type filter; missing and damaged with the raising issue
+named; the inventory with kit membership, out-now and open issues; maintenance
+with a `Decimal` cost carried as a number; server-side paging with the page
+size clamped; date filters read in the business time zone and a malformed date
+dropped; a CSV whose header matches the table's columns, with a BOM and CRLF;
+and formula-guarding in the writer.
+
+`tests/integration/documents.test.ts` (10): the handover document carrying
+everything from the snapshot and no internals; the return showing what went out
+beside what came back, with punctuality; **the roadmap's test** - renaming the
+kit and swapping a serial, after which the document and a freshly generated PDF
+still show what was signed; defensive parsing of a partial snapshot; PDFs for
+both documents with the signatures embedded, and one that still renders when
+the image files are gone; which documents a booking has; the route serving
+admin, engineer and viewer with dull headers and no internals; anonymous 401;
+an editor reading their own booking's document and refused another's; and 409,
+404 and unknown-kind answers.

@@ -42,6 +42,8 @@ import {
 import { searchActiveEditors } from '@/server/dal/editors.dal'
 import { getHandoverSummary, type HandoverSummary } from '@/server/dal/handover.dal'
 import { getBookingPhotos, type PhotoMeta } from '@/server/dal/attachments.dal'
+import { availableDocuments } from '@/server/services/documents.service'
+import type { DocumentKind } from '@/server/documents/snapshot'
 import { getReturnSummary, type ReturnSummary } from '@/server/dal/return.dal'
 import { getKitAvailabilityFacts, getKitDetail, type KitCandidate, type KitDetail, searchKitCandidates } from '@/server/dal/kits.dal'
 import { prisma, type Db } from '@/server/db/prisma'
@@ -558,19 +560,22 @@ export interface BookingWorkspace {
   returnInspection: ReturnSummary | null
   /** Optional photo evidence from either inspection; metadata only. */
   photos: PhotoMeta[]
+  /** Frozen documents that can be printed for this booking (Phase 12). */
+  documents: DocumentKind[]
 }
 
 export async function loadBookingWorkspace(db: Db, actor: Actor, id: string, now: Date = new Date()): Promise<BookingWorkspace | null> {
   const booking = await getBookingDetailForActor(db, actor, id)
   if (!booking) return null
 
-  const [facts, kit, activity, handover, returnInspection, photos] = await Promise.all([
+  const [facts, kit, activity, handover, returnInspection, photos, documents] = await Promise.all([
     getKitAvailabilityFacts(db, booking.kit.id),
     getKitDetail(db, booking.kit.id, { includeIssues: false }),
     getBookingActivity(db, id),
     getHandoverSummary(db, id),
     getReturnSummary(db, id),
     getBookingPhotos(db, id),
+    availableDocuments(db, id),
   ])
 
   const manage = can(actor, 'booking.update')
@@ -604,6 +609,7 @@ export async function loadBookingWorkspace(db: Db, actor: Actor, id: string, now
       handover?.status === 'COMPLETED',
     returnInspection,
     photos,
+    documents,
   }
 }
 
