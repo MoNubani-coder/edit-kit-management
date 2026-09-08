@@ -50,3 +50,10 @@ next-env.d.ts
 # generated Prisma client
 /src/generated/
 
+
+# end-to-end run artefacts: its own build directory, its report and its
+# storage. The E2E database is created and dropped by scripts/e2e/prepare.ts.
+/.next-e2e/
+/playwright-report/
+/test-results/
+/storage-e2e/

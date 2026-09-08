@@ -1,0 +1,161 @@
+name: CI
+
+# Every test in the repository, against a real PostgreSQL 16 with the same
+# extensions and the same migrations as production. The constraint suite proves
+# the triggers and indexes; the end-to-end suite drives a browser through a
+# handover and a return.
+#
+# The service container below is what `DATABASE_URL` points at, which is the
+# only thing tests/integration/constraints.test.ts needs in order to run
+# anywhere - locally, here, or under Testcontainers.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  AUTH_SECRET: ci-only-secret-value-at-least-32-characters-long
+  APP_TIMEZONE: Asia/Dubai
+  APP_ORG_NAME: Edit Kit Management (CI)
+  STORAGE_PROVIDER: LOCAL
+  NEXT_TELEMETRY_DISABLED: '1'
+
+jobs:
+  check:
+    name: Typecheck, lint and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - name: Build
+        run: npm run build
+        env:
+          # env.ts validates at import time and the build imports server
+          # modules. Real values are injected at run time.
+          DATABASE_URL: postgresql://build:build@localhost:5432/build?schema=public
+
+  test:
+    name: Unit and integration tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ekms
+          POSTGRES_PASSWORD: ekms_ci
+          POSTGRES_DB: ekms
+          POSTGRES_INITDB_ARGS: '--locale=C --encoding=UTF8'
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ekms -d ekms"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://ekms:ekms_ci@localhost:5432/ekms?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+
+      - name: Apply migrations
+        run: npx prisma migrate deploy
+
+      - name: Check for schema drift
+        run: npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
+
+      - name: Seed
+        run: npm run db:seed
+        env:
+          SEED_ADMIN_PASSWORD: ci-only-Passw0rd!2026
+          SEED_ENGINEER_PASSWORD: ci-only-Passw0rd!2026
+          SEED_EDITOR_PASSWORD: ci-only-Passw0rd!2026
+          SEED_VIEWER_PASSWORD: ci-only-Passw0rd!2026
+
+      - name: Vitest
+        run: npm test
+
+      - name: Database constraint script
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/db/verify-constraints.sql
+
+  e2e:
+    name: End-to-end journey
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ekms
+          POSTGRES_PASSWORD: ekms_ci
+          POSTGRES_DB: ekms
+          POSTGRES_INITDB_ARGS: '--locale=C --encoding=UTF8'
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ekms -d ekms"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://ekms:ekms_ci@localhost:5432/ekms?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Playwright
+        run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+  image:
+    name: Production image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: false
+          load: true
+          tags: ekms:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: The image starts and answers its health check
+        run: |
+          docker run -d --name ekms-ci -p 3000:3000 \
+            -e DATABASE_URL='postgresql://nobody:nobody@127.0.0.1:5432/nothing?schema=public' \
+            -e AUTH_SECRET="$AUTH_SECRET" -e AUTH_TRUST_HOST=true \
+            ekms:ci
+          for attempt in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/health || true)
+            # 503 is the right answer with no database attached: the server is
+            # up and says so honestly. Anything that is not 200 or 503 is a
+            # broken image.
+            if [ "$code" = "200" ] || [ "$code" = "503" ]; then echo "health: $code"; exit 0; fi
+            sleep 2
+          done
+          echo 'The image never answered /api/health.' >&2
+          docker logs ekms-ci >&2
+          exit 1
+      - if: always()
+        run: docker rm -f ekms-ci || true

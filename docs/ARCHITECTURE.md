@@ -832,6 +832,35 @@ editor profile. External editors, who have no login (AD-20), get the paper copy
 in person. Today no role reaches a report through the narrowing path, but the
 narrowing lives in the query rather than in the page that calls it.
 
+### AD-26 — A page refuses; a service authorises
+
+**Decision.** Every page authorises itself before it loads anything, through
+`requirePermissionForPage`, even when the service it calls authorises too. The
+service's check stays: it is the one a Server Action, a route handler or a
+future caller relies on. The page's check exists so the *answer* to an
+unauthorised request is the 403 page, decided by the page, rather than an
+exception escaping from a loader.
+
+**Why.** The two checks answer different questions. A service asked "may this
+actor do this?" and throwing is right: it is a library, and its callers differ.
+A page asked "what should this visitor see?" and the answer to "nothing" is a
+page, not a stack unwinding into the error boundary. Phase 13's end-to-end
+suite found what happens when only the service checks: `/issues` and
+`/reports` answered an unauthorised visitor with the 503 "temporarily
+unavailable" page, because the `ForbiddenError` reached the error boundary,
+which cannot tell a refusal from an outage. No data leaked and no permission
+was granted - the visitor was simply told the wrong thing, and told it in a way
+that suggested the system was broken rather than that they lacked access.
+
+**Consequence.** Two authorisation calls on the path of a protected page, and
+that duplication is deliberate: one decides the response, the other protects
+the data whoever calls it. The 503 page keeps its single meaning, which the
+auth-outage work depends on (AD-21): a bounded, retryable "temporarily
+unavailable" means the database could not be reached, never that somebody
+lacked a permission. `tests/e2e/auth-rbac.spec.ts` asserts the "Access denied"
+heading by name on every route a role cannot hold, so a page that forgets its
+own guard fails a test rather than shipping a 500.
+
 ## 6. Folder structure
 
 ```
@@ -841,6 +870,7 @@ edit-kit-management/
 │  └─ postgres-init/                # extensions on first boot
 ├─ docs/
 │  ├─ ARCHITECTURE.md               # this file
+│  ├─ OPERATIONS.md                 # Phase 13: deploy, backup, restore, what cannot be undone
 │  └─ ROADMAP.md
 ├─ prisma/
 │  ├─ schema.prisma
@@ -973,11 +1003,22 @@ edit-kit-management/
 │  │  ├─ constants/                 # status labels, colours, nav definition
 │  │  └─ utils/
 │  └─ types/
-├─ tests/                           # Vitest (Phase 2)
-│  ├─ unit/                         #   permissions, route policy, validation, rate limit, token callbacks
-│  ├─ integration/                  #   credentials, session, revocation, actions, booking scope, proxy
+├─ tests/                           # Vitest (Phase 2), Playwright (Phase 13)
+│  ├─ unit/                         #   permissions + the full matrix, route policy, validation, rate limit,
+│  │                                #   token callbacks, datetime, numbering, handover/return completion rules
+│  ├─ integration/                  #   credentials, session, revocation, actions, booking scope, proxy,
+│  │                                #   services, reports, documents, and the database's own constraints
+│  ├─ component/                    #   the sign-out interaction and the theme toggle
+│  ├─ e2e/                          #   Phase 13: the handover → return journey, auth and RBAC in a browser
 │  └─ helpers/                      #   test users, rollback transactions, real session cookies
-├─ scripts/auth/reset-password.ts   # break-glass password reset (revokes sessions)
+├─ scripts/
+│  ├─ auth/reset-password.ts        # break-glass password reset (revokes sessions)
+│  ├─ db/verify-constraints.sql     # the manual constraint script, incl. the seeded fixture's shape
+│  ├─ e2e/prepare.ts                # Phase 13: builds and seeds the dedicated E2E database
+│  └─ ops/backup.sh  restore.sh     # Phase 13: the two runbook commands
+├─ .github/workflows/ci.yml         # Phase 13: check, test, e2e, image
+├─ .dockerignore                    # Phase 13: keeps .env and storage/ out of the build context
+├─ playwright.config.ts             # Phase 13
 ├─ .env.example
 ├─ docker-compose.yml
 ├─ prisma.config.ts
@@ -2989,3 +3030,159 @@ the image files are gone; which documents a booking has; the route serving
 admin, engineer and viewer with dull headers and no internals; anonymous 401;
 an editor reading their own booking's document and refused another's; and 409,
 404 and unknown-kind answers.
+
+---
+
+## 22. Testing and deployment (Phase 13)
+
+### 22.1 Four layers, each proving something the others cannot
+
+| Layer | Where | What only this layer can prove |
+|---|---|---|
+| Units | `tests/unit/` | A rule at every edge, with no database to arrange - the numbering format across a year boundary, every cell of the permission matrix, a handover blocked for one reason among nine |
+| Integration | `tests/integration/` | The services, actions and routes against real PostgreSQL, inside transactions that roll back |
+| Constraints | `tests/integration/constraints.test.ts` | That the database refuses what the migrations promise, whatever the application does |
+| End to end | `tests/e2e/` | That a booking can actually go out and come back, in a browser, with a signature drawn by a pointer |
+
+Nothing was moved between layers. Phase 13 filled the two that were missing
+and automated the one that was manual.
+
+### 22.2 The units the roadmap named
+
+`numbering.test.ts` drives `nextNumber` with a stub client, so the assertions
+are about the reference itself: `BK-2026-000042` and `AST-000015`, the year a
+scope counts in, a yearly scope rolling over on 1 January while a global one
+does not, the year read in UTC so a late-evening booking in Dubai cannot land
+in the wrong one, and a refusal to hand back a reference when the statement
+returns nothing. The atomic increment is proved separately against real
+PostgreSQL, because that is the part a stub cannot tell you anything about.
+
+`permissions-matrix.test.ts` writes the whole grid out by hand and asserts
+every permission against every role, one test per cell. The point is that
+widening a role by accident fails a test that names the permission and the
+role. It then asserts the properties the grid should have: administration
+belongs to ADMIN alone, VIEWER holds nothing that mutates, EDITOR holds
+exactly three permissions, `perform` and `complete` are always granted
+together, and `manage` never appears without the matching `read`.
+
+`completion-rules.test.ts` calls the completion gates directly with hand-built
+shapes. It asserts the sentences, not the counts, because an engineer at a
+counter reads the sentence: "AST-000001 is no longer in the kit", "1 required
+check has not been answered", "6 handed-over items have no return answer:
+AST-000001, AST-000002, AST-000003, AST-000004 and more". It also pins the
+decisions that are easy to get backwards: a missing required item blocks a
+handover, a missing item on a *return* only warns because the booking still
+has to close; a return needs the receiving engineer's signature and treats the
+editor's absence as expected; and a kit comes back AVAILABLE only when the
+readiness rule says so, MAINTENANCE when it cannot be judged at all.
+
+### 22.3 The constraint suite, automated
+
+The roadmap asked for Testcontainers. What Testcontainers actually provides is
+a `DATABASE_URL` pointing at a disposable PostgreSQL, so
+`constraints.test.ts` takes its database from that variable and nothing else.
+It runs unchanged against a local server, a compose service, or a container
+Testcontainers starts.
+
+Two properties make it safe to provoke refusals:
+
+- **One transaction per test, always rolled back.** PostgreSQL aborts a
+  transaction after a failed statement, so a refusal has to be the last thing
+  a transaction does. Giving each test its own means every test can end in a
+  refusal, and none of them can poison another.
+- **Its own fixtures.** Each test builds the kit, asset, editor and booking it
+  needs. `scripts/db/verify-constraints.sql` asserts the seeded fixture's
+  exact shape in checks `9c` and `9d`, which fail the moment somebody adds
+  equipment by hand - useful on a fresh seed, misleading on a working
+  database. The automated suite asserts only what a migration promises.
+
+It covers the booking exclusion constraint (including which statuses hold a
+kit, the half-open boundary, and containment), the ordered period, the
+collection and return check, one live inspection of each type per booking, one
+live signature of each type per inspection, the locked-inspection trigger
+(notes, the frozen document, unlocking, and moving it to another booking) with
+voiding still permitted, the signature trigger with the same exemption, the
+append-only audit log against update, delete and a bulk delete, the numbering
+counter's atomic increment and its rollback, one active kit membership per
+asset, the maintenance checks and its one-active-record index, and the
+`ON DELETE` behaviour that keeps a maintenance record when its issue is
+removed. Three closing tests assert that nothing above left a row behind.
+
+### 22.4 The journey
+
+`tests/e2e/handover-return.spec.ts` is one ordered story in seven steps: the
+engineer books the seeded kit for an external editor through the pickers, sets
+it aside, opens the handover, records twelve items and twenty-five
+accessories, passes every check, installs both applications, draws two
+signatures on the canvas with the mouse, completes, reads the signed document
+and downloads its PDF, then receives the kit back, accounts for every item,
+signs as the receiving engineer, completes the return, and finds the booking
+completed, the kit available again and both documents in place. The last step
+proves another editor cannot reach any of it.
+
+Two habits keep it honest rather than merely green. Each step **reads the page
+back from the server** after saving, so what is asserted is what the next
+request sees rather than what the client thinks it sent. And answers are given
+by checking the actual radio the styled label points at, which cannot miss
+when a row re-renders underneath it.
+
+It cannot use the rollback trick - a browser journey commits - so it gets a
+database of its own. `scripts/e2e/prepare.ts` drops and recreates `ekms_e2e`,
+applies the same migrations, and seeds it with four accounts whose passwords
+the specs know. The server runs on its own port with its own build directory
+(`NEXT_DIST_DIR`) and its own storage path, so it cannot collide with a
+running development server or reach a real signature.
+
+### 22.5 What the journey found
+
+Two pages loaded their data through a service that authorises for itself. When
+the caller lacked the permission, the service's `ForbiddenError` escaped as an
+unhandled error and the visitor got the 503 "temporarily unavailable" page
+instead of a 403. `/issues` and `/reports` now refuse on the page, through
+`requirePermissionForPage`, the way every other page in the application
+already did. The behaviour that changed is the answer to an unauthorised
+request: it went from a 500 to the "Access denied" page it always should have
+been.
+
+That is what an end-to-end layer is for. The permission was never granted, the
+data never leaked, and every other layer was green.
+
+### 22.6 The image
+
+The multi-stage `docker/Dockerfile` was written in Phase 1 and is unchanged.
+What Phase 13 added is `.dockerignore`, and it matters more than it looks:
+`COPY . .` sends the whole build context, so without it a real `.env` and the
+`storage/` directory of signed evidence would be baked into a layer and shipped.
+It also keeps `node_modules` and the host's `.next` out, which the image builds
+for itself anyway.
+
+`.github/workflows/ci.yml` runs the four jobs the phase implies: typecheck,
+lint and build; the Vitest suites plus the SQL constraint script against a
+PostgreSQL 16 service container, with a drift check; the Playwright journey;
+and the production image, which is built and then started to prove it answers
+`/api/health`. A 503 there is a pass: with no database attached, the honest
+answer is that the database is unreachable, and the point of the check is that
+the server came up at all.
+
+### 22.7 Backup and restore
+
+`docs/OPERATIONS.md` is the runbook; `scripts/ops/backup.sh` and
+`restore.sh` are its two commands. The shape of a backup is four files: the
+`pg_dump` custom-format dump, a tar of the storage directory, the list of
+migrations the dump contains, and a checksum file.
+
+Three decisions are worth recording. The **dump comes before the archive**,
+because a signature row whose file has not been archived yet still renders a
+document while a file with no row is invisible - the order errs towards keeping
+every row. The **restore verifies before it writes**: checksums first, then a
+refusal if the target already has tables unless it is told otherwise, then a
+single-transaction restore so a failure leaves the target as it was, and
+finally a comparison of the restored migration list against the backup's. And
+both scripts **strip Prisma's own connection parameters** before handing the
+URL to `pg_dump`, which refuses a URI carrying `?schema=`.
+
+The runbook ends with the check that actually matters, because row counts do
+not prove a document renders: open the most recent completed booking's signed
+handover and confirm the signature images appear rather than the words
+"signature on file". If they do not, the database restored and the storage
+archive did not.

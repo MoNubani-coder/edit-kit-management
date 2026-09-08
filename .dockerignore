@@ -1,0 +1,42 @@
+# What never enters the image build context.
+#
+# docker/Dockerfile copies the repository with `COPY . .`, so anything not
+# listed here is sent to the daemon and can end up in a layer. Three things
+# must never be: secrets, signed evidence, and the host's own build output.
+
+# Secrets. The template is fine; a real .env is not.
+.env
+.env.*
+!.env.example
+
+# Signed handover evidence and issue photos. Personal data, and the runtime
+# mounts its own volume at /app/storage regardless.
+storage/
+storage-e2e/
+
+# Host build output and caches. The image builds its own.
+.next/
+.next-e2e/
+node_modules/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+
+# Development tooling and history.
+.git/
+.github/
+.vscode/
+.idea/
+*.log
+npm-debug.log*
+
+# Tests are not shipped.
+tests/
+playwright.config.ts
+vitest.config.mts
+
+# Documentation is read from the repository, not from the container.
+docs/
+*.md
+!README.md

@@ -11,6 +11,7 @@ import { IssuesTable } from '@/features/issues/components/issues-table'
 import { env } from '@/lib/env'
 import { cn } from '@/lib/utils/cn'
 import { ISSUE_FILTER_LABELS, ISSUE_FILTERS, parseIssueListParams } from '@/lib/validation/issues'
+import { requirePermissionForPage } from '@/server/auth/page-guards'
 import { loadIssueList } from '@/server/services/issues.service'
 
 export const metadata: Metadata = { title: 'Issues' }
@@ -27,6 +28,9 @@ export const dynamic = 'force-dynamic'
  * reported.
  */
 export default async function IssuesPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  // The page decides the refusal, so a role without issue.read gets the 403
+  // page rather than the service's error escaping as a 500.
+  await requirePermissionForPage('issue.read')
   const query = await searchParams
   const params = parseIssueListParams(query)
   const page = await loadIssueList(params)

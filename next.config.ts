@@ -34,6 +34,11 @@ const nextConfig: NextConfig = {
   // Required by docker/Dockerfile - emits a self-contained server bundle.
   output: 'standalone',
 
+  // The end-to-end run starts its own server against its own database, so it
+  // needs its own build directory: two servers sharing `.next` fight over the
+  // same compiled output. Unset everywhere else, which keeps the default.
+  distDir: process.env.NEXT_DIST_DIR ?? '.next',
+
   // Pin the workspace root. Without this, Turbopack walks up looking for a
   // lockfile, finds a stray package-lock.json in the user's home directory and
   // warns that it would trace the entire home folder.

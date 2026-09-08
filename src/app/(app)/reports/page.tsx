@@ -4,6 +4,7 @@ import Link from 'next/link'
 
 import { PageHeader } from '@/components/common/page-header'
 import { Alert } from '@/components/ui/alert'
+import { requirePermissionForPage } from '@/server/auth/page-guards'
 import { loadReportCatalogue } from '@/server/services/reports.service'
 
 export const metadata: Metadata = { title: 'Reports' }
@@ -18,6 +19,8 @@ export const dynamic = 'force-dynamic'
  * are listed, and each one re-checks that when it is opened.
  */
 export default async function ReportsPage() {
+  // Same reason as /issues: refuse on the page, so the answer is a 403.
+  await requirePermissionForPage('report.read')
   const { catalogue, ownOnly } = await loadReportCatalogue()
   const total = catalogue.reduce((sum, group) => sum + group.reports.length, 0)
 

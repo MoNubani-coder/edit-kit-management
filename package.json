@@ -12,6 +12,10 @@
     "check": "npm run typecheck && npm run lint",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "npm run e2e:prepare && playwright test",
+    "test:e2e:ui": "npm run e2e:prepare && playwright test --ui",
+    "e2e:prepare": "tsx scripts/e2e/cli.ts",
+    "e2e:drop": "tsx scripts/e2e/cli.ts --drop",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
@@ -51,6 +55,7 @@
     "zod": "^4.5.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@tailwindcss/postcss": "^4",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^7.0.1",

@@ -12,6 +12,11 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // The end-to-end run's own build directory and artefacts (Phase 13).
+    ".next-e2e/**",
+    "playwright-report/**",
+    "test-results/**",
+    "storage-e2e/**",
   ]),
 ]);
 

@@ -248,11 +248,29 @@ asset's serial number — the PDF must still show what was signed. Automated
 
 ---
 
-## Phase 13 — Testing and deployment
+## Phase 13 — Testing and deployment ✅ COMPLETE
 
-Vitest unit tests (numbering, permissions, handover/return completion),
-Testcontainers integration tests proving the DB constraints, Playwright E2E over
-handover → return, production Docker build, backup and restore runbook.
+Delivered as four test layers and a runbook. Vitest units for the three the
+phase named: the reference numbering including the year boundary, the whole
+permission matrix asserted cell by cell, and the handover and return completion
+gates called directly with hand-built shapes. The database's constraints are now
+proved by `npm test` rather than by hand, in transactions that each roll back,
+with fixtures every test builds for itself - so the suite is independent of the
+seeded fixture's shape and runs unchanged wherever `DATABASE_URL` points, which
+is all Testcontainers provides. Playwright drives the handover → return journey
+in a browser, on a database of its own, and found a real defect on the way:
+`/issues` and `/reports` answered an unauthorised visitor with the 503 page
+instead of a 403, because their loaders authorised and the page did not
+(AD-26). The production image gained the `.dockerignore` it was missing, which
+had been sending `.env` and the signed evidence in `storage/` into the build
+context. `docs/OPERATIONS.md` plus `scripts/ops/backup.sh` and `restore.sh` are
+the backup and restore runbook, rehearsed into a scratch database. CI runs all
+of it and builds the image. No migration was needed.
+
+**Test:** the whole suite green twice over, the constraint proofs automated,
+and the journey from a reserved booking to a signed return document driven
+through a real browser. Automated (274 tests added: 211 unit, 63 constraint,
+plus 16 Playwright specs).
 
 ---
 

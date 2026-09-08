@@ -2,12 +2,15 @@
 
 Running log of what exists, what to test, and what comes next.
 
-- **Current phase:** 12 of 13 — Reports and PDF — ✅ **complete**
+- **Current phase:** 13 of 13 — Testing and deployment — ✅ **complete**
 - **Status:** verified against PostgreSQL 16.15 — six migrations applied (none
-  new in Phases 8–12), zero drift, 29 database constraint checks passing,
-  397/397 Vitest tests (two consecutive runs, database, filesystem and numbering
-  counters unchanged), typecheck + lint clean, production build clean
-- **Last updated:** 2026-09-07 (Phase 12)
+  new in Phases 8–13), zero drift, the database's constraints now proved by the
+  test suite itself, 671/671 Vitest tests (two consecutive runs, database,
+  filesystem and numbering counters unchanged), 16/16 Playwright specs on a
+  dedicated E2E database, typecheck + lint clean, production build clean
+- **Last updated:** 2026-09-07 (Phase 13)
+- **The roadmap is complete.** What remains is listed under "Open decisions
+  carried forward" at the end of this file.
 
 ### Fix: the /login ↔ /dashboard redirect loop
 
@@ -1768,29 +1771,162 @@ document and is refused another's; nothing signed yet is 409, a missing booking
 
 ---
 
-## Next: Phase 13 — Testing and deployment
+## Phase 13 — Testing and deployment (complete)
 
-The last roadmap phase: Playwright end-to-end over handover → return,
-Testcontainers for the database constraints the SQL suite checks by hand, the
-production Docker build, and a backup and restore runbook. Vitest unit and
-integration coverage has grown with every phase and now stands at 397 tests
-across 41 files, so Phase 13 is mostly the two layers Vitest cannot reach plus
-the deployment story.
+The last roadmap phase. Four test layers, a production image that no longer
+ships secrets, and a backup runbook that has been rehearsed. Design in
+[docs/ARCHITECTURE.md §22](docs/ARCHITECTURE.md#22-testing-and-deployment-phase-13);
+the runbook is [docs/OPERATIONS.md](docs/OPERATIONS.md).
+
+**What exists**
+
+- No migration. Nothing in the schema changed.
+- One dependency added: `@playwright/test`, plus its Chromium download.
+- `tests/unit/numbering.test.ts` - the reference format per scope, the period
+  a scope counts in, the year boundary, the year read in UTC, and the refusal
+  when the statement returns nothing.
+- `tests/unit/permissions-matrix.test.ts` - the whole grid, one test per
+  permission per role, then the properties the grid must have.
+- `tests/unit/completion-rules.test.ts` - `bookingHandoverBlockers`,
+  `verificationVerdict`, `bookingReturnBlockers`, `returnVerdict` and
+  `kitStatusAfterReturn`, asserted on the sentences an engineer reads.
+- `tests/integration/constraints.test.ts` - the database's own guarantees,
+  each test in its own rolled-back transaction with its own fixtures.
+- `tests/e2e/` - the handover → return journey in seven ordered steps, plus
+  authentication and RBAC in a browser, and a shared `helpers.ts` that signs
+  in, signs out and draws on the signature canvas with the mouse.
+- `playwright.config.ts` and `scripts/e2e/prepare.ts` + `cli.ts` - the E2E run
+  gets its own database (`ekms_e2e`), its own build directory
+  (`NEXT_DIST_DIR=.next-e2e`), its own storage (`./storage-e2e`) and its own
+  four seeded accounts. It cannot reach development data.
+- `next.config.ts` - `distDir` now reads `NEXT_DIST_DIR`, unset everywhere
+  except the E2E run, so two servers never fight over `.next`.
+- `.dockerignore` - new, and the important one: `COPY . .` was sending `.env`
+  and the signed evidence in `storage/` into the build context.
+- `.github/workflows/ci.yml` - four jobs: check, test (with a PostgreSQL 16
+  service container, a drift check and the SQL constraint script), the
+  Playwright journey, and the production image built then started to prove it
+  answers `/api/health`.
+- `docs/OPERATIONS.md`, `scripts/ops/backup.sh`, `scripts/ops/restore.sh` -
+  deploy, migrate, back up, restore, and what cannot be undone.
+- `eslint.config.mjs` and `tsconfig.json` - ignore the E2E artefacts.
+- Two fixes the E2E suite found: `/issues` and `/reports` now refuse with
+  `requirePermissionForPage`, so an unauthorised visitor gets the 403 page
+  instead of the 503 one (AD-26).
+
+**Verification — Phase 13 (2026-09-07)**
+
+| Check | Result |
+|---|---|
+| `npm test` run 1 (45 files) | ✅ **671 / 671** |
+| `npm test` run 2 (45 files) | ✅ **671 / 671** |
+| Phases 1–12 suites | ✅ all 397 green, unchanged |
+| `npm run test:e2e` (Playwright, Chromium) | ✅ **16 / 16**, on `ekms_e2e` |
+| Database after both runs | ✅ counters unchanged (ASSET 16, MAINTENANCE 1, BOOKING 1); 1 booking, 1 inspection, 2 signatures, 14 assets, 98 audit rows, 0 issues, 0 attachments |
+| Filesystem after both runs | ✅ the two live signature files only |
+| `scripts/db/verify-constraints.sql` | ✅ 29 / 31 pass, rolled back (9c and 9d assert the pristine seed and fail against the two hand-created dev assets, unchanged since Phase 10) |
+| `prisma migrate status` | ✅ 6 migrations, up to date |
+| `prisma migrate diff --exit-code` | ✅ No difference detected |
+| `npm run check` | ✅ clean, no warnings |
+| `npm run build` | ✅ clean, 37 routes |
+| Backup and restore rehearsal | ✅ backed up the live database read-only, restored into a scratch database, checksums verified, 6 migrations matching, then dropped the scratch database |
+
+**What the 274 new tests prove**
+
+*Numbering* — every scope's reference format including the four-digit kit
+padding, a yearly scope rolling to a new period on 1 January while a global one
+carries on, the year read in UTC so 23:30 on 31 December in Dubai still counts
+as December, a value wider than the padding left intact, and a refusal rather
+than a made-up reference when the counter comes back empty.
+
+*Permissions* — 120 cells, one test each, plus: ADMIN holds everything and
+nobody else does; every `admin.*` permission belongs to ADMIN alone; VIEWER
+holds no permission that mutates anything; EDITOR holds exactly
+`dashboard.view`, `booking.readOwn` and `booking.signOwn`; `perform` and
+`complete` are always granted together; `manage` never appears without the
+matching `read`; and a name the matrix does not declare is refused for
+everybody.
+
+*Completion* — a handover cleared, and blocked for each of nine reasons with
+the sentence asserted; a required item missing blocks while an optional one
+warns; an item that left the kit or entered maintenance since the snapshot
+blocks; unanswered required checks are counted in one message with the right
+singular; both signatures are demanded and a return signature does not count;
+a return needs every handed-over item accounted for but lets a missing or
+damaged one through as a warning that promises an issue; the receiving
+engineer must sign and the editor's absence is expected; and the kit comes back
+AVAILABLE only when the readiness rule says so, MAINTENANCE when it cannot be
+judged.
+
+*The database* — the booking exclusion constraint across every status that
+holds a kit, containment as well as partial overlap, the half-open boundary
+that lets back-to-back bookings through, zero-length and reversed windows
+refused, a collection later than the expected return refused; one live
+inspection of each type per booking with a voided one exempt; one live
+signature of each type per inspection; the locked-inspection trigger against
+notes, the frozen document, unlocking and re-pointing, with voiding still
+allowed; the signature trigger against the image, the hash, the signer and the
+time, with voiding still allowed; the audit log against update, delete and a
+bulk delete; the numbering counter incrementing atomically and rolling back
+with its transaction; one active kit membership per asset with history kept;
+and the maintenance checks, its one-active-record index and the `ON DELETE SET
+NULL` that keeps a record when its issue is deleted.
+
+*The journey* — a booking reserved through the pickers, set aside, handed over
+with twelve items and twenty-five accessories recorded, every check passed,
+both applications installed, two signatures drawn on the canvas and the
+handover completed; the signed document read and its PDF downloaded as a real
+`%PDF-`; the kit received back, every item accounted for, the return checks
+answered, the receiving engineer signed and the return completed; the booking
+completed, the kit AVAILABLE again, both documents in place and the booking
+listed in the completed-documents report; and another editor unable to reach
+any of it. Alongside it: login and callback, a wrong password refused without a
+hint, sign-out through the animated menu, `/login` sending a signed-in user to
+the dashboard without looping, and each role stopped at the routes it cannot
+hold with "Access denied" by name.
+
+**Manual checks — Phase 13**
+
+- [ ] `npm run test:e2e` from a clean checkout: it builds `ekms_e2e`, runs
+  Chromium, and the development database's counters do not move.
+- [ ] While the E2E run is going, the development server on port 3000 keeps
+  working: separate build directory, separate database.
+- [ ] `docker build -f docker/Dockerfile -t ekms:latest .` then
+  `docker history ekms:latest`: no `.env`, no `storage/`.
+- [ ] `docker compose --profile app up -d --build`, then
+  `curl -fsS localhost:3000/api/health`.
+- [ ] Run `scripts/ops/backup.sh` against a running system, then restore it
+  into a scratch database and open the most recent signed document: the
+  signature images must appear, not "signature on file".
+- [ ] As VIEWER: `/issues` shows "Access denied", not "Temporarily
+  unavailable". Same for `/reports` as the seeded EDITOR.
+
+---
+
+## Next: the roadmap is finished
+
+All thirteen phases are complete. What follows is not roadmap work but the
+decisions that were deliberately deferred, in the order they are likely to
+matter.
 
 **Open decisions carried forward**
 
+- The maintenance workflow itself: records are read-only, they appear in a
+  report and an issue can point at one, but nothing creates or advances them.
+  This is the largest remaining gap in the product and no phase covers it.
 - Whether ENGINEER may manage kits (`kit.manage`) — still ADMIN only.
-- The maintenance workflow itself: records are read-only and now appear in a
-  report, an issue can point at one, but nothing creates or advances them yet.
-  Not in the remaining roadmap phase; worth a decision now.
 - Whether the overdue sweep is needed for notifications now that OVERDUE is
   derived at read time.
 - Rate-limit store for multi-instance deployment.
 - The soft-deleted smoke accounts and the hard-delete-vs-audit question for
   users who have signed in.
-- Two constraint-suite checks (9c, 9d) assert the pristine seed shape and fail
-  against hand-created dev data; relax them or reseed.
-- `npm audit` advisories in the Prisma CLI's own dependency tree, present since
-  before Phase 10; the suggested fix downgrades Prisma.
+- Two constraint-script checks (9c, 9d) assert the pristine seed shape and
+  fail against hand-created dev data. The automated suite no longer depends on
+  it; either relax those two or keep the script for fresh seeds only.
+- `npm audit` advisories in the Prisma CLI's own dependency tree, present
+  since before Phase 10; the suggested fix downgrades Prisma.
 - Whether reports need an Excel renderer beside CSV, and whether any report
   should be schedulable rather than pulled by hand.
+- A real deployment target. The image, the compose profile, the health check
+  and the runbook are ready; where it runs, behind what proxy, with what
+  backup schedule and what off-host copy, is not decided.
