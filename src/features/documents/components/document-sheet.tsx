@@ -1,3 +1,5 @@
+import { Fragment } from 'react'
+
 import { formatDate, formatDateTime } from '@/lib/datetime'
 import type { FrozenDocument } from '@/server/documents/snapshot'
 
@@ -127,8 +129,8 @@ export function DocumentSheet({
               const condition = isReturn ? returnWord(line.returnStatus) : word(line.status)
               const problem = (isReturn ? line.returnStatus : line.status) === 'MISSING' || (isReturn ? line.returnStatus : line.status) === 'DAMAGED'
               return (
-                <>
-                  <tr key={`${line.assetCode}-${index}`} className="border-t border-slate-200 align-top">
+                <Fragment key={`${line.assetCode}-${index}`}>
+                  <tr className="border-t border-slate-200 align-top">
                     <td className="py-1.5 pr-2 font-mono font-semibold">{line.assetCode ?? '—'}</td>
                     <td className="py-1.5 pr-2">{line.name ?? '—'}</td>
                     <td className="py-1.5 pr-2 font-mono text-[11px]">{line.serialNumber ?? '—'}</td>
@@ -136,7 +138,7 @@ export function DocumentSheet({
                     <td className={`py-1.5 font-semibold ${problem ? 'text-rose-700' : ''}`}>{condition}</td>
                   </tr>
                   {line.accessories.length > 0 || line.notes ? (
-                    <tr key={`${line.assetCode}-${index}-detail`}>
+                    <tr>
                       <td />
                       <td colSpan={4} className="pb-1.5 text-[11px] text-slate-600">
                         {line.accessories.map((accessory, accessoryIndex) => (
@@ -153,7 +155,7 @@ export function DocumentSheet({
                       </td>
                     </tr>
                   ) : null}
-                </>
+                </Fragment>
               )
             })}
           </tbody>

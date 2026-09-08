@@ -2,15 +2,18 @@
 
 Running log of what exists, what to test, and what comes next.
 
-- **Current phase:** 13 of 13 — Testing and deployment — ✅ **complete**
+- **Current phase:** all 13 roadmap phases complete, plus the Administration
+  placeholder audit of 2026-09-08
 - **Status:** verified against PostgreSQL 16.15 — six migrations applied (none
-  new in Phases 8–13), zero drift, the database's constraints now proved by the
-  test suite itself, 671/671 Vitest tests (two consecutive runs, database,
-  filesystem and numbering counters unchanged), 16/16 Playwright specs on a
-  dedicated E2E database, typecheck + lint clean, production build clean
-- **Last updated:** 2026-09-07 (Phase 13)
-- **The roadmap is complete.** What remains is listed under "Open decisions
-  carried forward" at the end of this file.
+  new since Phase 7), zero drift, the database's constraints proved by the test
+  suite itself, 743/743 Vitest tests (two consecutive runs, database, filesystem
+  and numbering counters unchanged), 25/25 Playwright specs on a dedicated E2E
+  database, typecheck + lint clean, production build clean
+- **Last updated:** 2026-09-08 (Administration completed)
+- **No route renders a placeholder.** Every page in the application shows its
+  real workspace; an end-to-end test asserts that the Administration section
+  never says "Arrives in Phase" again. What remains is decisions, listed at the
+  end of this file.
 
 ### Fix: the /login ↔ /dashboard redirect loop
 
@@ -1903,30 +1906,143 @@ hold with "Access denied" by name.
 
 ---
 
-## Next: the roadmap is finished
+## Administration completed — the placeholder audit (2026-09-08)
 
-All thirteen phases are complete. What follows is not roadmap work but the
-decisions that were deliberately deferred, in the order they are likely to
-matter.
+A live check found `/admin/audit-logs` rendering "Arrives in Phase 3". A sweep
+of every route found the same stand-in on four more Administration pages. The
+"roadmap complete" note previously in this file was written from a route
+inventory rather than from what those routes rendered; that was wrong, and this
+section replaces it. Design in
+[docs/ARCHITECTURE.md §23](docs/ARCHITECTURE.md#23-administration-completed).
 
-**Open decisions carried forward**
+**Every placeholder found, and what happened to it**
+
+| Route | Found | Outcome |
+|---|---|---|
+| `/admin/audit-logs` | "Arrives in Phase 3" | Built: the log with filters, sorting, paging and resolved references |
+| `/admin/users` | "Arrives in Phase 3", though `setUserStatus` shipped in Phase 2 | Built: roles, suspension, lockouts |
+| `/admin/software` | "Arrives in Phase 5" | Built: the catalogue kits and handovers already read |
+| `/admin/checklists` | "Arrives in Phase 5" | Built: templates and their checks |
+| `/admin/settings` | "Arrives in Phase 3" | Replaced with the effective configuration; the stored settings are shown and marked as not yet live |
+| `booking-activity.tsx` | "Handover and return events join this trail in later phases" | Corrected: they have since Phases 8 and 9 |
+
+Nothing else in the application renders a placeholder, a "coming soon", a
+phase-gated control or a disabled unfinished button. `/admin/categories` has
+been real since Phase 4 and is unchanged. The remaining `PlaceholderPage`
+component is now referenced by nothing; it is kept rather than deleted so that
+a future unbuilt section has an honest stand-in to use.
+
+**What exists**
+
+- No migration. Every table used here has been in the schema since Phase 1.
+- `src/lib/validation/audit.ts` - the action list mirroring the enum, labels,
+  areas, entity types, list parameters and `auditLogHref`.
+- `src/lib/validation/admin.ts` - account list parameters and `usersHref`, the
+  role and status lists, the software schema, the template and item schemas.
+- `src/server/dal/audit.dal.ts` - the whitelist select, the filters, the
+  reference resolution, the actor options and the log's span.
+- `src/server/dal/admin.dal.ts` - accounts (with the hash reduced to a
+  boolean), the software catalogue with kit usage, templates with their items
+  and usage counts, and the stored settings.
+- `src/server/services/audit-logs.service.ts` - one authorised read.
+- `src/server/services/admin.service.ts` - `setUserRole`, `unlockUser`, the
+  software catalogue, the templates and their checks.
+- `src/server/actions/admin.actions.ts` - eleven actions, each with its own
+  specific permission.
+- Pages: `/admin/audit-logs`, `/admin/users`, `/admin/software`,
+  `/admin/checklists`, `/admin/settings`.
+- Components: `audit-log-table.tsx`, `audit-log-filters.tsx`,
+  `user-row-actions.tsx`, `software-form.tsx`, `software-active-toggle.tsx`,
+  `checklist-forms.tsx`.
+
+**Two real defects fixed along the way**
+
+- A `'use server'` module may only export async functions. `admin.actions.ts`
+  exported a constant array, which made every action in the file fail silently
+  in the browser: the forms submitted, nothing happened, and no error appeared.
+  Caught by the end-to-end suite, not by typecheck, lint or the build.
+- Two components mapped over rows returning an unkeyed fragment with keys on
+  the children instead. Fixed in the settings table and in the Phase 12
+  document sheet.
+
+**Verification (2026-09-08)**
+
+| Check | Result |
+|---|---|
+| `npm test` run 1 (47 files) | ✅ **743 / 743** |
+| `npm test` run 2 (47 files) | ✅ **743 / 743** |
+| Phases 1–13 suites | ✅ all 671 green, unchanged |
+| `npm run test:e2e` | ✅ **25 / 25** in Chromium, on `ekms_e2e` |
+| Database after both runs | ✅ counters unchanged (ASSET 16, MAINTENANCE 1, BOOKING 1); 1 booking, 1 inspection, 2 signatures, 14 assets, 98 audit rows, 0 issues, 0 attachments |
+| Filesystem after both runs | ✅ the two live signature files only |
+| `scripts/db/verify-constraints.sql` | ✅ 29 / 31 pass, rolled back (9c and 9d assert the pristine seed) |
+| `prisma migrate status` | ✅ 6 migrations, up to date |
+| `prisma migrate diff --exit-code` | ✅ No difference detected |
+| `npm run check` | ✅ clean, no warnings |
+| `npm run build` | ✅ clean; all seven `/admin` routes compiled |
+
+**Manual browser checks**
+
+- [ ] As ADMIN, open all six Administration sections: each shows its real
+  workspace and none mentions a phase.
+- [ ] Audit Logs: filter to sign-in failures, set a date range, sort by Who,
+  page through, then copy the URL into a new tab and get the same view.
+- [ ] Audit Logs: confirm no raw JSON, no hash and no token appears, and that a
+  booking reference links to its booking.
+- [ ] Users: your own row shows "you", its role select is disabled and it
+  offers no Suspend. Another account suspends and reinstates, and the badge
+  changes.
+- [ ] Users: suspend an account that is signed in elsewhere; its next request
+  signs it out.
+- [ ] Software: add an application, see it on a kit's software list, then
+  deactivate it and confirm it leaves the picker but stays in the table.
+- [ ] Checklists: add a check to the seeded template, start a handover, and see
+  the check on the handover form. Then try to remove that check: refused, with
+  the booking count.
+- [ ] Settings: the effective configuration matches this deployment, and the
+  notice about stored settings is visible.
+- [ ] As VIEWER and as EDITOR: all six sections show "Access denied".
+- [ ] Light and dark themes; 768 px width: the tables scroll in their own
+  containers.
+
+---
+
+## Next: the decisions this is waiting on
+
+The thirteen roadmap phases are complete and the Administration area is now
+complete as a set of screens. What remains is not roadmap work but decisions,
+in the order they are likely to matter.
+
+**The two that are user-visible**
+
+- **Creating accounts and setting passwords from the browser.** The Users page
+  manages roles, suspension and lockouts but cannot create an account or set a
+  password, because how a credential reaches a person has no answer yet: an
+  emailed invitation link needs a mail sender, a printed one-time password
+  needs a policy, and Entra ID would remove the question entirely. Until then
+  `npm run auth:reset-password` is the path.
+- **Making the stored settings live.** `app_settings` holds seven seeded rows
+  that no code reads, and `/admin/settings` says so rather than offering dead
+  controls. Two of them change how bookings behave, two belong to the
+  maintenance workflow below, and one duplicates the environment's time zone.
+  Wiring them up means deciding which layer reads them and what happens to
+  bookings already made under the old value.
+
+**Carried forward**
 
 - The maintenance workflow itself: records are read-only, they appear in a
   report and an issue can point at one, but nothing creates or advances them.
-  This is the largest remaining gap in the product and no phase covers it.
+  This is the largest remaining gap in the product.
 - Whether ENGINEER may manage kits (`kit.manage`) — still ADMIN only.
 - Whether the overdue sweep is needed for notifications now that OVERDUE is
   derived at read time.
 - Rate-limit store for multi-instance deployment.
 - The soft-deleted smoke accounts and the hard-delete-vs-audit question for
   users who have signed in.
-- Two constraint-script checks (9c, 9d) assert the pristine seed shape and
-  fail against hand-created dev data. The automated suite no longer depends on
-  it; either relax those two or keep the script for fresh seeds only.
-- `npm audit` advisories in the Prisma CLI's own dependency tree, present
-  since before Phase 10; the suggested fix downgrades Prisma.
+- Two constraint-script checks (9c, 9d) assert the pristine seed shape and fail
+  against hand-created dev data.
+- `npm audit` advisories in the Prisma CLI's own dependency tree.
 - Whether reports need an Excel renderer beside CSV, and whether any report
-  should be schedulable rather than pulled by hand.
-- A real deployment target. The image, the compose profile, the health check
-  and the runbook are ready; where it runs, behind what proxy, with what
-  backup schedule and what off-host copy, is not decided.
+  should be schedulable.
+- A real deployment target: the image, the compose profile, the health check
+  and the runbook are ready; where it runs is not decided.

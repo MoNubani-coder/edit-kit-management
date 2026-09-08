@@ -30,7 +30,7 @@ export function BookingActivity({ events, timeZone, now }: { events: BookingActi
   return (
     <Timeline
       title="Activity"
-      description="Every change to this booking, with who made it. Handover and return events join this trail in later phases."
+      description="Every change to this booking, with who made it, including its handover and its return."
       events={items}
       timeZone={timeZone}
       now={now}

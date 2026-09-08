@@ -861,6 +861,37 @@ lacked a permission. `tests/e2e/auth-rbac.spec.ts` asserts the "Access denied"
 heading by name on every route a role cannot hold, so a page that forgets its
 own guard fails a test rather than shipping a 500.
 
+### AD-27 — The audit log is read as prose, never as its own JSON
+
+**Decision.** The audit log page selects a whitelist of columns, and the three
+JSON columns a row carries - `previousValue`, `newValue` and `metadata` - are
+not in it. What the page shows is the summary sentence the service wrote at the
+time, plus the actor, the action, the entity with its reference resolved, and
+the request's IP and client. The before-and-after values stay in the database,
+readable by somebody with database access and an actual reason.
+
+**Why.** Those three columns are written by around forty call sites and hold
+whatever each one put there: a status pair, a cancellation reason, a resolution
+note - and, if somebody is careless later, a token or a hash. A page that
+renders them renders whatever the newest call site decided to include, which
+means the safety of the screen depends on every future write rather than on the
+screen. Selecting a fixed set of columns inverts that: a new call site cannot
+leak anything through this page, because the page never asks. It also reads
+better. "Khalid Al Mansoori set layla@example.ae to SUSPENDED" is what an
+administrator needs; `{"status":"ACTIVE"} → {"status":"SUSPENDED"}` is what a
+developer needs, and they have psql.
+
+**Consequence.** The summary is not decoration - it is the audit trail's
+user interface, so every service that records an entry writes a sentence a
+person can read, and the tests assert those sentences. `entityId` is a cuid, so
+the page resolves it in one query per entity type present and links to the
+booking, kit, asset, issue or editor it names; an entity that has since been
+deleted shows no reference rather than an invented one. The request's IP and a
+shortened client string are shown because an administrator investigating a
+sign-in failure needs them and the columns already hold them. A test asserts
+that the words `passwordHash`, `sessionToken` and `secret` appear nowhere in
+what the page receives, and a second one asserts it in the browser.
+
 ## 6. Folder structure
 
 ```
@@ -958,8 +989,9 @@ edit-kit-management/
 │  │  │  ├─ route-policy.ts         #   public / authenticated / permission per path
 │  │  │  ├─ rate-limit.ts           #   LoginRateLimiter seam + in-memory default
 │  │  │  └─ errors.ts               #   UnauthorizedError / ForbiddenError
-│  │  ├─ dal/                       # authorised reads (bookings, dashboard, assets, catalogue, kits, editors, handover, return, attachments, issues)
-│  │  ├─ actions/                   # server actions (auth, admin-users, assets, accessories, categories,
+│  │  ├─ dal/                       # authorised reads (bookings, dashboard, assets, catalogue, kits, editors,
+│  │  │                             #   handover, return, attachments, issues, audit, admin)
+│  │  ├─ actions/                   # server actions (auth, admin-users, admin, assets, accessories, categories,
 │  │  │                             #   kits, kit-composition, editors, bookings, handover, return, photos, issues)
 │  │  ├─ services/                  # business logic, transaction-aware
 │  │  │  ├─ dashboard.service.ts    # Phase 3: buildDashboard (permission-gated assembly)
@@ -976,6 +1008,8 @@ edit-kit-management/
 │  │  │  ├─ issues.service.ts       # Phase 11: the issue lifecycle, reporting, assignment
 │  │  │  ├─ reports.service.ts      # Phase 12: the catalogue, the scope, running a report, CSV
 │  │  │  ├─ documents.service.ts    # Phase 12: reading a frozen document and rendering its PDF
+│  │  │  ├─ audit-logs.service.ts   # §23: reading the append-only log
+│  │  │  ├─ admin.service.ts        # §23: roles, lockouts, software, checklist templates
 │  │  │  ├─ errors.ts               # DomainError + unique-violation mapping
 │  │  │  ├─ booking.service.ts
 │  │  │  ├─ handover.service.ts
@@ -3186,3 +3220,155 @@ not prove a document renders: open the most recent completed booking's signed
 handover and confirm the signature images appear rather than the words
 "signature on file". If they do not, the database restored and the storage
 archive did not.
+
+---
+
+## 23. Administration completed
+
+### 23.1 What was actually missing
+
+A live check found `/admin/audit-logs` still rendering "Arrives in Phase 3".
+A sweep of every route then found the same stand-in on four more pages. The
+earlier claim that the roadmap was finished had been made from a route
+inventory - every page existed and every guard ran - without checking what
+those pages rendered. Five of thirty-four pages were a permission check
+wrapped around an empty state.
+
+| Page | Was | Now |
+|---|---|---|
+| `/admin/audit-logs` | Placeholder | The log, filtered, sorted, paged, with references resolved |
+| `/admin/users` | Placeholder, though `setUserStatus` had existed since Phase 2 | Accounts with roles, suspension and lockouts |
+| `/admin/software` | Placeholder | The catalogue kits and handovers already read |
+| `/admin/checklists` | Placeholder | Templates and their checks, with the copy rule enforced |
+| `/admin/settings` | Placeholder claiming Phase 3 | The effective configuration, and the stored settings marked as not yet live |
+| `/admin/categories` | Real since Phase 4 | Unchanged |
+
+The lesson is in the audit itself: "the backend exists" is not "the feature
+exists". `/admin/users` had a working, audited, session-revoking action for
+fifteen months of roadmap and no way to call it.
+
+### 23.2 The audit log
+
+`/admin/audit-logs` reads through `audit.dal.ts`, whose select is a whitelist
+that excludes the three JSON columns (AD-27). Filters are declared in
+`validation/audit.ts` and applied server-side: free text over the summary, the
+actor name and the entity id; an area, which is a named group of actions; a
+single action; an actor; an entity type; and a date range read in the business
+time zone with the end day included, the same convention the reports use.
+Sorting is by time, action, entity type or actor, and paging is the database's
+work. Every state is a URL.
+
+Two details are worth recording. Sorting by action orders by the enum's
+declaration order rather than the alphabet, because that is what PostgreSQL
+does with an enum column and it groups related actions together, which is the
+more useful answer. And the actor filter is built from the log rather than from
+the user table, so somebody whose account has been removed still appears -
+their actions are still in the record.
+
+References are resolved in one query per entity type present in the page: a
+booking id becomes `BK-2026-000001` and links to the booking, an asset becomes
+its code and name, an account becomes a name and role with no link because
+there is no per-account page. An entity that has since been deleted shows no
+reference rather than a cuid.
+
+### 23.3 Accounts
+
+Three things can be done to an account, and all three revoke the target's
+sessions on the server, so each takes effect on their next request rather than
+whenever they next sign in: change the role, suspend or reinstate, clear a
+lockout. Suspension is the Phase 2 action called directly, unchanged. The role
+change is new and carries one guard the placeholder never needed: the last
+active administrator cannot be demoted, because somebody has to be able to
+grant the role back.
+
+The list never carries a password hash out of the data layer. The select does
+include `passwordHash`, but the mapper turns it into a boolean - `hasPassword`
+- and the row type has no field for it. A test serialises the whole page result
+and asserts no bcrypt prefix appears anywhere in it.
+
+Two things the page deliberately does not do, both stated on the page rather
+than left as absent buttons: it does not create accounts, and it does not set
+passwords. Both need a decision about how a credential reaches a person, which
+is a security answer rather than a UI one. `npm run auth:reset-password`
+remains the path, and it revokes sessions as it goes.
+
+### 23.4 Software and checklist templates
+
+Neither is reference data for its own sake. A kit lists the applications it
+should carry, the handover snapshots that list, and a required application that
+is not installed blocks completion - so the catalogue is where those entries
+come from. A template is a list of checks with a phase; a booking copies the
+template's items when its handover starts, and from then on the copy is that
+booking's own record.
+
+That copy rule is what shapes the editor. Editing a template never touches a
+booking that has already used it, and a check a booking has copied cannot be
+removed - the page says "in use" and the service refuses with the number of
+bookings involved. Exactly one template is the default, making one the default
+clears the previous one, and deactivating the default is refused until another
+takes over. Nothing is ever deleted while something references it: software and
+templates deactivate, exactly as categories have since Phase 4.
+
+### 23.5 Settings, and why it stayed read-only
+
+The `app_settings` table was created in Phase 1 and seeded with seven sensible
+defaults. **No code reads it.** Building an editor over it would have produced
+a page of controls that change nothing, which is the same class of problem as
+the placeholder it replaced.
+
+So the page shows two things and is explicit about the difference. The
+effective configuration - the environment values the application genuinely
+reads on every request, safe ones only: the organisation, the time zone, the
+due-soon window, the session lifetime, the lockout policy, the storage provider
+and the upload limit. No secret, no connection string, no filesystem path. Then
+the stored settings as values, under a notice saying plainly that nothing reads
+them yet.
+
+Making them live is a product decision rather than a screen. Two of the seven
+change how bookings behave (the loan-day default and the overdue grace period),
+two belong to a maintenance workflow that does not exist, and one duplicates
+the environment's time zone. That decision is recorded in DEVELOPMENT.md.
+
+### 23.6 The defect the sweep found
+
+`/issues` and `/reports` answered an unauthorised visitor with the 503
+"temporarily unavailable" page rather than a 403, because their loaders
+authorised and the pages did not (AD-26). Both now refuse on the page. The
+Playwright suite asserts the "Access denied" heading by name on every route a
+role cannot hold, and `administration.spec.ts` asserts that the phrase "Arrives
+in Phase" appears nowhere in the Administration section - so a placeholder
+cannot come back unnoticed.
+
+### 23.7 Tests
+
+`tests/integration/audit-logs.test.ts` (30): the list newest-first with the
+actor and role recorded at the time; the JSON columns absent from the row and
+from the serialised page, including the words `passwordHash`, `sessionToken`
+and `secret`; references resolved for bookings, kits, assets and accounts, and
+absent for a deleted entity or a row with no id; the actor name surviving a
+rename; each filter and their combination; the date range in the business time
+zone; case-insensitive search over three fields; sorting in the enum's order;
+server-side paging; the actor options; the label table checked against the
+enum; a malformed filter dropped; the URL round-tripping; and the permission,
+which is administration only.
+
+`tests/integration/admin.test.ts` (42): the account list never carrying a hash,
+saying when no password exists, searching three fields, filtering by role,
+status, lockout and never-signed-in, counting the tabs, hiding removed
+accounts, and showing the linked profile; a role change revoking sessions and
+being audited, refused on your own account, a no-op when unchanged, and refused
+for the last active administrator; a lockout cleared without touching the
+password; the software catalogue created, edited, deactivated, refused on a
+duplicate name and version but allowed at a different version, with kit usage
+counted; templates created, renamed, activated, made default one at a time,
+refused as default while inactive, refused deactivation while default, their
+checks added, edited, removed, and refused removal once a booking has copied
+one; and the enum-mirroring lists.
+
+`tests/e2e/administration.spec.ts` (9): all six sections rendering a real
+workspace with no phase language anywhere; the log listing, filtering and
+sorting through the URL; the log showing no JSON; an administrator unable to
+change their own role or suspend themselves; another account suspended and
+reinstated; an application added and retired; a template built, a check added
+and removed; settings honest about which configuration is live and free of
+secrets and paths; and a viewer refused all six.

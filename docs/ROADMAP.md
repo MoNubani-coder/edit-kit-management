@@ -274,6 +274,31 @@ plus 16 Playwright specs).
 
 ---
 
+## After the roadmap — the Administration placeholder audit ✅ COMPLETE
+
+The thirteen phases above were marked complete while five Administration pages
+were still rendering a "Arrives in Phase" stand-in behind a real permission
+check: Audit Logs, Users, Software, Checklist Templates and Settings. A live
+check found the first one; a sweep of every route found the rest. All five are
+now real workspaces, and one stale line of forward-looking copy on the booking
+activity panel was corrected.
+
+The audit log is the substantial one: filters, sorting, paging and date ranges
+all server-side, entity ids resolved into the references people quote, and a
+whitelist select that keeps the three JSON columns a row carries off the page
+entirely (AD-27). Users manages roles, suspension and lockouts through the
+session-revoking action that had existed since Phase 2 with no way to call it.
+Settings is deliberately read-only: it shows the environment values the
+application genuinely reads, and marks the seeded `app_settings` rows as not
+yet consumed rather than offering controls that would change nothing.
+
+**Test:** every Administration section opened in a browser as an administrator
+renders its real workspace, and the phrase "Arrives in Phase" appears nowhere
+in the section. Automated (81 tests added: 30 audit log, 42 administration,
+9 Playwright specs).
+
+---
+
 ## Sequencing notes
 
 - **Phases 4–6 are independent** and can run in parallel across developers.
