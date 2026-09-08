@@ -11,6 +11,7 @@ import { HandoverSummaryPanel } from '@/features/handover/components/handover-su
 import { PhotoStrip } from '@/features/photos/components/photo-strip'
 import { ReturnSummaryPanel } from '@/features/return/components/return-summary'
 import { AvailabilityNotice } from '@/features/kits/components/availability-notice'
+import { requesterOf } from '@/lib/booking-requester'
 import { BOOKING_STATUS_LABELS } from '@/lib/booking-rules'
 import { formatDateTime } from '@/lib/datetime'
 import type { BookingWorkspace } from '@/server/services/bookings.service'
@@ -60,6 +61,7 @@ const NEXT_STEP: Record<string, string> = {
 export function BookingOverview({ workspace, timeZone, now }: { workspace: BookingWorkspace; timeZone: string; now: Date }) {
   const { booking, time, readiness, kitNow, canReadKit, canReadEditor } = workspace
   const editor = booking.editor
+  const requester = requesterOf(booking)
   const kit = booking.kit
   const anyAction =
     workspace.canReserve ||
@@ -83,9 +85,9 @@ export function BookingOverview({ workspace, timeZone, now }: { workspace: Booki
           The kit was expected back on {formatDateTime(booking.expectedReturnDate, timeZone)} and has not been returned.
         </Alert>
       ) : null}
-      {!editor.isActive && booking.status !== 'CANCELLED' && booking.status !== 'COMPLETED' ? (
-        <Alert variant="warning" title="Editor inactive">
-          {editor.fullName} has been deactivated in the editor directory. Existing bookings stay valid; new ones cannot be made.
+      {editor && !editor.isActive && booking.status !== 'CANCELLED' && booking.status !== 'COMPLETED' ? (
+        <Alert variant="warning" title="Directory entry inactive">
+          {editor.fullName} has been deactivated in the editor directory. This booking stays valid; the name recorded on it does not change.
         </Alert>
       ) : null}
 
@@ -101,12 +103,12 @@ export function BookingOverview({ workspace, timeZone, now }: { workspace: Booki
 
       <div className="grid gap-6 xl:grid-cols-3">
         <Panel
-          title="Editor"
+          title="Requester"
           icon={UserRound}
           action={
-            canReadEditor ? (
+            canReadEditor && editor ? (
               <Link href={`/editors/${editor.id}`} className="text-sm font-medium text-accent-foreground hover:underline">
-                Open
+                Directory entry
               </Link>
             ) : null
           }
@@ -114,16 +116,20 @@ export function BookingOverview({ workspace, timeZone, now }: { workspace: Booki
           <dl className="grid gap-4">
             <Field label="Name">
               <span className="flex flex-wrap items-center gap-2">
-                <span className="font-medium">{editor.fullName}</span>
-                <Badge tone={editor.isExternal ? 'neutral' : 'blue'}>{editor.isExternal ? 'External' : 'Internal'}</Badge>
-                {!editor.isActive ? <Badge tone="neutral">Inactive</Badge> : null}
+                <span className="font-medium">{requester.name}</span>
+                {requester.isExternal !== null ? <Badge tone={requester.isExternal ? 'neutral' : 'blue'}>{requester.isExternal ? 'External' : 'Internal'}</Badge> : null}
+                {editor && !editor.isActive ? <Badge tone="neutral">Inactive</Badge> : null}
               </span>
             </Field>
             <Field label="Staff ID" mono>
-              {editor.staffId ?? <Empty />}
+              {requester.staffId ?? <Empty />}
             </Field>
-            <Field label="Contact">{editor.contactNumber ?? <Empty />}</Field>
-            <Field label={editor.isExternal ? 'Company' : 'Department'}>{(editor.isExternal ? editor.company : editor.department) ?? <Empty />}</Field>
+            <Field label="Mobile">{requester.mobile ?? <Empty />}</Field>
+            <Field label="Project">{requester.projectName ?? <Empty />}</Field>
+            <Field label="Work order" mono>
+              {requester.workOrder ?? <Empty />}
+            </Field>
+            {editor ? <Field label={editor.isExternal ? 'Company' : 'Department'}>{(editor.isExternal ? editor.company : editor.department) ?? <Empty />}</Field> : null}
           </dl>
         </Panel>
 
@@ -182,12 +188,29 @@ export function BookingOverview({ workspace, timeZone, now }: { workspace: Booki
               </span>
               <span className="mt-1 block text-xs text-muted">{NEXT_STEP[booking.status]}</span>
             </Field>
-            <Field label="Responsible engineer">
-              {booking.engineer.fullName}
-              {booking.engineer.staffId ? <span className="ml-2 font-mono text-xs text-muted">{booking.engineer.staffId}</span> : null}
+            <Field label="Prepared by">
+              {booking.createdBy.name}
+              <span className="ml-2 text-xs text-muted">from the signed-in account</span>
             </Field>
+            {booking.engineer ? (
+              <Field label="Assigned engineer">
+                {booking.engineer.fullName}
+                {booking.engineer.staffId ? <span className="ml-2 font-mono text-xs text-muted">{booking.engineer.staffId}</span> : null}
+              </Field>
+            ) : null}
             <Field label="Purpose">{booking.purpose ?? <Empty />}</Field>
-            <Field label="Handover checklist">{booking.checklistTemplate?.name ?? 'System default'}</Field>
+            <Field label="Handover checklist">
+              {workspace.checklist.handoverCount === 0 ? (
+                'No checks on this booking'
+              ) : workspace.checklist.complete ? (
+                <span className="text-emerald-700 dark:text-emerald-300">Complete · {workspace.checklist.passed} of {workspace.checklist.required} required checks passed</span>
+              ) : (
+                <span className="text-amber-800 dark:text-amber-300">
+                  {workspace.checklist.outstanding.length} of {workspace.checklist.required} required {workspace.checklist.outstanding.length === 1 ? 'check' : 'checks'} outstanding · see the Checklist tab
+                </span>
+              )}
+              <span className="block text-xs text-muted">{booking.checklistTemplate?.name ?? 'System default'}</span>
+            </Field>
             <Field label="Created">{formatDateTime(booking.createdAt, timeZone)}</Field>
           </dl>
         </Panel>

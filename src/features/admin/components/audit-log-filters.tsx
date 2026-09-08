@@ -7,6 +7,7 @@ import { Select } from '@/components/ui/select'
 import {
   AUDIT_ACTION_LABELS,
   AUDIT_ACTIONS,
+  AUDIT_DEFAULT_PAGE_SIZE,
   AUDIT_ENTITY_LABELS,
   AUDIT_ENTITY_TYPES,
   AUDIT_GROUP_LABELS,
@@ -30,6 +31,7 @@ export function AuditLogFilters({ params, actors, filtered }: { params: AuditLis
       <input type="hidden" name="page" value="1" />
       {params.sort !== 'createdAt' ? <input type="hidden" name="sort" value={params.sort} /> : null}
       {params.dir !== 'desc' ? <input type="hidden" name="dir" value={params.dir} /> : null}
+      {params.pageSize !== AUDIT_DEFAULT_PAGE_SIZE ? <input type="hidden" name="pageSize" value={params.pageSize} /> : null}
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div className="sm:col-span-2">

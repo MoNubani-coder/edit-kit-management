@@ -1,18 +1,20 @@
-import type { IssueListParams } from '@/lib/validation/issues'
+import { ISSUE_DEFAULT_PAGE_SIZE, type IssueListParams } from '@/lib/validation/issues'
 
 /**
  * Every list state is a URL. Defaults are omitted so the common case stays
  * short, and unspecified keys keep their current value.
  */
 export function issuesHref(params: IssueListParams, overrides: Partial<IssueListParams> = {}): string {
-  const merged = { ...params, ...overrides }
+  // Changing the question restarts at the first page; only paging keeps the page.
+  const resetPage = Object.keys(overrides).some((key) => key !== 'page')
+  const merged = { ...params, ...overrides, page: resetPage ? 1 : overrides.page ?? params.page }
   const query = new URLSearchParams()
   if (merged.q) query.set('q', merged.q)
   if (merged.filter !== 'open') query.set('filter', merged.filter)
   if (merged.sort !== 'reportedAt') query.set('sort', merged.sort)
   if (merged.dir !== 'desc') query.set('dir', merged.dir)
   if (merged.page > 1) query.set('page', String(merged.page))
-  if (merged.pageSize !== 25) query.set('pageSize', String(merged.pageSize))
+  if (merged.pageSize !== ISSUE_DEFAULT_PAGE_SIZE) query.set('pageSize', String(merged.pageSize))
   const search = query.toString()
   return search ? `/issues?${search}` : '/issues'
 }

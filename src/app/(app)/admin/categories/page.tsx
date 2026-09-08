@@ -4,6 +4,7 @@ import Link from 'next/link'
 
 import { EmptyState } from '@/components/common/empty-state'
 import { PageHeader } from '@/components/common/page-header'
+import { Pagination } from '@/components/common/pagination'
 import { Badge } from '@/components/ui/badge'
 import { buttonVariants } from '@/components/ui/button'
 import { AdminTabs } from '@/features/admin/components/admin-tabs'
@@ -11,8 +12,9 @@ import { CategoryActiveToggle } from '@/features/admin/components/category-activ
 import { CategoryForm, type CategoryFormValues } from '@/features/admin/components/category-form'
 import { formatDate } from '@/lib/datetime'
 import { env } from '@/lib/env'
+import { pageSchema, pageSizeSchema } from '@/lib/pagination'
 import { requirePermissionForPage } from '@/server/auth/page-guards'
-import { listCategories } from '@/server/dal/catalogue.dal'
+import { getCategory, listCategoriesPage } from '@/server/dal/catalogue.dal'
 import { prisma } from '@/server/db/prisma'
 
 export const metadata: Metadata = { title: 'Categories' }
@@ -37,13 +39,28 @@ export default async function AdminCategoriesPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
   const actor = await requirePermissionForPage('admin.categories.manage')
-  const editing = first((await searchParams).category) ?? null
-  const categories = await listCategories(prisma, { includeInactive: true })
+  const query = await searchParams
+  const editing = first(query.category) ?? null
+  const result = await listCategoriesPage(prisma, {
+    page: pageSchema.parse(first(query.page)),
+    pageSize: pageSizeSchema().parse(first(query.pageSize)),
+    includeInactive: true,
+  })
+  const categories = result.rows
+  const hrefFor = (page: number) => {
+    const search = new URLSearchParams()
+    if (editing) search.set('category', editing)
+    if (page > 1) search.set('page', String(page))
+    if (result.pageSize !== 25) search.set('pageSize', String(result.pageSize))
+    const text = search.toString()
+    return text ? `/admin/categories?${text}` : '/admin/categories'
+  }
 
-  const editingRow = editing && editing !== 'new' ? categories.find((category) => category.id === editing) ?? null : null
+  // The row being edited may sit on another page; read it directly.
+  const editingRow = editing && editing !== 'new' ? await getCategory(prisma, editing) : null
   const formValues: CategoryFormValues | null =
     editing === 'new'
-      ? { name: '', code: '', description: '', icon: '', sortOrder: categories.length }
+      ? { name: '', code: '', description: '', icon: '', sortOrder: result.total }
       : editingRow
         ? {
             id: editingRow.id,
@@ -125,6 +142,7 @@ export default async function AdminCategoriesPage({
               </table>
             </div>
           )}
+          <Pagination page={result.page} pageCount={result.pageCount} total={result.total} pageSize={result.pageSize} hrefFor={hrefFor} />
         </div>
       </div>
     </>

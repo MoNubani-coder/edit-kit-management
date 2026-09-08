@@ -96,7 +96,9 @@ const captureSignatureAction = action({
     } catch {
       /* no request scope */
     }
-    await captureSignature(prisma, actor, input.bookingId, input.role, input.image, signatureStore, context)
+    // The typed recipient identity applies to the recipient's own pad only; the
+    // service ignores it for the engineer, whose identity is the actor's.
+    await captureSignature(prisma, actor, input.bookingId, input.role, input.image, signatureStore, { ...context, recipientName: input.recipientName ?? null, recipientMobile: input.recipientMobile ?? null })
     redirect(`/bookings/${input.bookingId}/handover#signatures`)
   },
 })

@@ -91,7 +91,7 @@ const captureReturnSignatureAction = action({
     } catch {
       /* no request scope */
     }
-    await captureReturnSignature(prisma, actor, input.bookingId, input.role, input.image, signatureStore, context)
+    await captureReturnSignature(prisma, actor, input.bookingId, input.role, input.image, signatureStore, { ...context, recipientName: input.recipientName ?? null, recipientMobile: input.recipientMobile ?? null })
     redirect(`/bookings/${input.bookingId}/return#signature`)
   },
 })
@@ -104,7 +104,8 @@ const completeReturnAction = action({
   permission: 'return.complete',
   schema: completeReturnSchema.extend(bookingId.shape),
   async handler({ actor, input }) {
-    await completeReturn(prisma, actor, input.bookingId)
+    // Who brought the kit back is typed; who received it is the actor.
+    await completeReturn(prisma, actor, input.bookingId, input.returnedByName)
     redirect(`/bookings/${input.bookingId}`)
   },
 })

@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { pageSizeSchema } from '@/lib/pagination'
+
 import { formDataToObject } from './assets'
 
 /**
@@ -92,10 +94,15 @@ export type UpdateKitInput = z.output<typeof updateKitSchema>
 // Membership
 // -----------------------------------------------------------------------------
 
+/** How many candidates the equipment picker shows at once. */
+export const ASSET_CANDIDATE_LIMIT = 25
+
 export const kitMemberInputSchema = z.object({
   assetId: z.string().trim().min(1, 'Choose the equipment to add.'),
   slotLabel: optionalText(60),
   isRequired: requiredChoice,
+  /** The picker's search term, so the add can return to the same results. */
+  pick: optionalText(100),
 })
 export type KitMemberInput = z.output<typeof kitMemberInputSchema>
 
@@ -148,7 +155,7 @@ const listParamsSchema = z.object({
   sort: z.enum(KIT_SORT_KEYS).catch('kitCode'),
   dir: z.enum(['asc', 'desc']).catch('asc'),
   page: z.coerce.number().int().min(1).catch(1),
-  pageSize: z.coerce.number().int().min(5).max(100).catch(KIT_DEFAULT_PAGE_SIZE),
+  pageSize: pageSizeSchema(KIT_DEFAULT_PAGE_SIZE),
 })
 
 export type KitListParams = z.output<typeof listParamsSchema>
@@ -168,13 +175,13 @@ export function parseKitListParams(raw: RawParams): KitListParams {
 }
 
 /** The workspace tabs on /kits/[id]. */
-export const KIT_TABS = ['overview', 'equipment', 'software', 'checklist', 'history'] as const
+/** Software is no longer an operational tab: verification does not gate a handover. */
+export const KIT_TABS = ['overview', 'equipment', 'checklist', 'history'] as const
 export type KitTab = (typeof KIT_TABS)[number]
 
 export const KIT_TAB_LABELS: Record<KitTab, string> = {
   overview: 'Overview',
   equipment: 'Equipment',
-  software: 'Software',
   checklist: 'Checklist',
   history: 'History',
 }

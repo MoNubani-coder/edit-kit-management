@@ -2,6 +2,8 @@ import 'server-only'
 
 import { z } from 'zod'
 
+import { pageSizeSchema } from '@/lib/pagination'
+
 import { businessDayRange, zonedLocalToDate } from '@/lib/datetime'
 
 import type { FilterKey, ReportParams, ReportScope } from './types'
@@ -29,7 +31,7 @@ const schema = z.object({
   editorId: z.preprocess((value) => (typeof value === 'string' && value.trim() === '' ? undefined : value), z.string().trim().max(64).optional()),
   severity: z.preprocess((value) => (typeof value === 'string' && value.trim() === '' ? undefined : value), z.string().trim().max(40).optional()),
   page: z.coerce.number().int().min(1).catch(1),
-  pageSize: z.coerce.number().int().min(5).max(REPORT_MAX_PAGE_SIZE).catch(REPORT_DEFAULT_PAGE_SIZE),
+  pageSize: pageSizeSchema(REPORT_DEFAULT_PAGE_SIZE, REPORT_MAX_PAGE_SIZE),
 })
 
 export type RawParams = Record<string, string | string[] | undefined>

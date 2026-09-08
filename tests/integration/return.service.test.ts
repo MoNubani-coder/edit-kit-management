@@ -28,6 +28,7 @@ import {
 import { memorySignatureStore } from '@/server/storage/signature-store'
 
 import { actorFor, createTestUser, testDb, type TestUser, withRollback } from '../helpers/db'
+import { prepareChecklistFor } from '../helpers/checklist'
 
 /**
  * The return inspection against the real database, inside rolled-back
@@ -182,6 +183,7 @@ async function scenario(
   const stage = options.stage ?? 'checked-out'
   if (stage === 'reserved') return result
 
+  await prepareChecklistFor(tx, fx.actor, booking.id)
   await markReadyForHandover(tx, fx.actor, booking.id)
   if (stage === 'ready') return result
 

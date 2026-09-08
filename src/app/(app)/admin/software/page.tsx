@@ -4,6 +4,7 @@ import Link from 'next/link'
 
 import { EmptyState } from '@/components/common/empty-state'
 import { PageHeader } from '@/components/common/page-header'
+import { Pagination } from '@/components/common/pagination'
 import { Badge } from '@/components/ui/badge'
 import { buttonVariants } from '@/components/ui/button'
 import { AdminTabs } from '@/features/admin/components/admin-tabs'
@@ -11,9 +12,10 @@ import { SoftwareActiveToggle } from '@/features/admin/components/software-activ
 import { SoftwareForm, type SoftwareFormValues } from '@/features/admin/components/software-form'
 import { formatDate } from '@/lib/datetime'
 import { env } from '@/lib/env'
+import { pageSchema, pageSizeSchema } from '@/lib/pagination'
 import { first } from '@/lib/validation/admin'
 import { requirePermissionForPage } from '@/server/auth/page-guards'
-import { listSoftware } from '@/server/dal/admin.dal'
+import { getSoftware, listSoftwarePage } from '@/server/dal/admin.dal'
 import { prisma } from '@/server/db/prisma'
 
 export const metadata: Metadata = { title: 'Software' }
@@ -36,13 +38,28 @@ const TD = 'px-4 py-3 align-middle'
  */
 export default async function AdminSoftwarePage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const actor = await requirePermissionForPage('admin.software.manage')
-  const editing = first((await searchParams).software) ?? null
-  const applications = await listSoftware(prisma, { includeInactive: true })
+  const query = await searchParams
+  const editing = first(query.software) ?? null
+  const result = await listSoftwarePage(prisma, {
+    page: pageSchema.parse(first(query.page)),
+    pageSize: pageSizeSchema().parse(first(query.pageSize)),
+    includeInactive: true,
+  })
+  const applications = result.rows
+  const hrefFor = (page: number) => {
+    const search = new URLSearchParams()
+    if (editing) search.set('software', editing)
+    if (page > 1) search.set('page', String(page))
+    if (result.pageSize !== 25) search.set('pageSize', String(result.pageSize))
+    const text = search.toString()
+    return text ? `/admin/software?${text}` : '/admin/software'
+  }
 
-  const editingRow = editing && editing !== 'new' ? applications.find((application) => application.id === editing) ?? null : null
+  // The row being edited may sit on another page; read it directly.
+  const editingRow = editing && editing !== 'new' ? await getSoftware(prisma, editing) : null
   const formValues: SoftwareFormValues | null =
     editing === 'new'
-      ? { name: '', vendor: '', version: '', licenseType: '', notes: '', sortOrder: applications.length }
+      ? { name: '', vendor: '', version: '', licenseType: '', notes: '', sortOrder: result.total }
       : editingRow
         ? {
             id: editingRow.id,
@@ -139,6 +156,7 @@ export default async function AdminSoftwarePage({ searchParams }: { searchParams
               </table>
             </div>
           )}
+          <Pagination page={result.page} pageCount={result.pageCount} total={result.total} pageSize={result.pageSize} hrefFor={hrefFor} />
         </div>
       </div>
     </>

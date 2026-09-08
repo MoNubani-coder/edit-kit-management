@@ -892,6 +892,132 @@ sign-in failure needs them and the columns already hold them. A test asserts
 that the words `passwordHash`, `sessionToken` and `secret` appear nowhere in
 what the page receives, and a second one asserts it in the browser.
 
+### AD-28 — The requester is booking data, not a directory lookup
+
+**Decision.** A booking carries who the kit is for as its own columns -
+`requesterName`, `requesterStaffId`, `requesterMobile`, `projectName`,
+`workOrder` - typed by the engineer taking the request. `editorId` is now
+nullable, no booking requires an `EditorProfile`, and none is created behind
+the engineer's back. A database CHECK (`bookings_requester_identified`) holds
+the floor: every booking has either a linked profile or a typed name. One pure
+helper, `requesterOf(booking)`, is how every list, panel, document and report
+reads the answer.
+
+**Why.** The Editors directory was a second place to maintain the same people,
+and it stood between an engineer and a booking: someone walks up with a work
+order, and the system asked for a directory entry first. Most of those entries
+existed to hold a name and a phone number that the booking itself should own.
+Snapshotting them onto the booking also makes the record honest - what the
+booking says is what was true when it was made, not what the directory says
+today after somebody left the department.
+
+**Consequence.** Two generations of booking coexist, so nothing reads
+`booking.editor.fullName` any more: it is null on every new booking.
+`requesterOf` prefers the booking's own copy, falls back to the profile, and
+never returns a blank. The legacy path still works end to end - a booking made
+against a profile snapshots that profile's name, staff ID and number at
+creation - and the Editors pages still exist for the history they hold; they
+are only out of the primary navigation. The EDITOR role's own-booking scope
+stays strictly FK-based (`editorId = my profile`): a typed name is text, and
+authorising on text would let anybody's booking be claimed by typing a name.
+
+### AD-29 — The checklist is answered before the kit is set aside
+
+**Decision.** A booking copies its checklist template the moment it is created,
+and the answers are recorded on the booking (`preparedStatus`, `preparedNotes`,
+`preparedAt`, `preparedById`) before the handover exists. `markReadyForHandover`
+refuses until every required handover-phase check is passed or marked not
+applicable with a note. When the handover starts, those answers are seeded into
+the inspection's `ChecklistResult` rows, and the handover's step is a review of
+what was found, not a first pass over it.
+
+**Why.** The kit is prepared in the store room, hours or days before anybody
+arrives to collect it. Asking the questions at the counter - with the editor
+waiting - meant either a rushed set of answers or a discovery that the kit is
+not fit to go out at the worst possible moment. The lifecycle already had a
+"ready for handover" state that claimed the kit was prepared; the checklist is
+what makes that claim true.
+
+**Consequence.** The gate is one pure function, `checklistPreparation(items)`,
+so the page's status panel and the service's refusal agree by construction. The
+copy is taken at creation, so editing a template afterwards never changes a
+booking that has already been prepared - and a test asserts a renamed template
+item leaves a prepared booking's copy alone. Once a handover inspection is
+live, `prepareChecklist` refuses and points at the handover page, so there is
+exactly one place the answers can be changed at any moment. A kit change on an
+unanswered booking re-copies the new kit's template; on an answered one it does
+not, because those answers were about equipment.
+
+### AD-30 — Who did the work is the session, never the payload
+
+**Decision.** "Prepared by" is `booking.createdBy`, the authenticated user who
+made the booking. "Handed over by" and "Received by" are the actor completing
+the inspection. The engineer signature is attributed to the actor's user id.
+The booking form's schema does not accept an `engineerId`, a `createdById` or
+anything else that names a person doing the work, so a crafted POST has nothing
+to say about it; where a server-side caller genuinely needs to assign an
+engineer profile - the seed does - the service takes it as a parameter that no
+request can reach.
+
+**Why.** Every one of these fields ends up on a signed PDF that ADM keeps as
+the record of who handled public equipment. A value that arrives in a form body
+is a value an attacker chooses. Deriving them from the session costs nothing:
+the person doing the work is, by definition, the person who is signed in.
+
+**Consequence.** The only identities that come from the client are the ones
+that belong to somebody with no account: the recipient's typed name and mobile
+at the pad, and the name of whoever physically brought the kit back. Both are
+labelled as typed values, both are frozen by the immutability triggers once
+written (`signerMobile` on signatures, `returnedByName` on inspections), and
+neither carries any authority - they name a person, they do not authorise
+anything. LDAP is not implemented: authentication is the Credentials provider
+over bcrypt, and §24.4 lists exactly what an LDAP or Entra integration would
+still need. Nothing in the application pretends otherwise.
+
+### AD-31 — Software is recorded on the kit, and gates nothing
+
+**Decision.** `SoftwareApplication`, `KitSoftware` and `SoftwareCheck` keep
+their tables, their rows and their history. What changed is that a handover no
+longer creates software checks, an uninstalled application no longer blocks a
+reservation or a handover, and the software tab is off the kit workspace and
+the Administration navigation. A gap on a kit's software list is a warning on
+the verification verdict - noted on the document, not a stop.
+
+**Why.** The people this system is for hand over a suitcase of hardware. Which
+version of Resolve is on the laptop is not something the store room verifies at
+the counter, and making it a blocker meant the blocker was routinely overridden
+or the check was answered without being made - which is worse than not asking.
+
+**Consequence.** Existing frozen documents still show the software they
+snapshotted; new ones show none, because none was checked. The catalogue is
+still administered at `/admin/software` for the kits that reference it - the
+route is intact, only the navigation entry is gone - and the data a future
+software-audit feature would need is still being kept.
+
+### AD-32 — One pagination rule, applied by every list
+
+**Decision.** `src/lib/pagination.ts` owns the numbers: a floor of 5, a ceiling
+of 100 for entity lists and 200 for the dense read-only ones, a default of 25
+(50 for dense), and two helpers - `clampPage` and `pageCountFor`. Every list
+parser takes its page size from `pageSizeSchema`, every paged DAL read clamps
+the requested page against the count it just measured, every table renders the
+same footer with a range, a numbered window and previous/next, and every filter
+form carries the chosen page size forward while restarting at page one.
+
+**Why.** Six lists had grown their own rules: one silently replaced an
+out-of-range size with the default, another accepted any integer, a third
+showed "0-0 of 0" under an empty state, and three reference tables read the
+whole table into the page. A person moving between screens cannot learn six
+behaviours, and an unbounded `findMany` is a page-load away from a problem.
+
+**Consequence.** An out-of-range size is clamped to the nearest bound rather
+than reset, so a wide URL still shows something sensible; a page past the end
+lands on the last page that exists rather than an empty one; a total of zero
+renders no footer at all, because the empty state already says it. The three
+Administration reference tables (categories, software, checklist templates) got
+paged DAL functions, and the row being edited is read directly rather than
+found in the current page, so editing a row on page three still works.
+
 ## 6. Folder structure
 
 ```
@@ -3372,3 +3498,134 @@ change their own role or suspend themselves; another account suspended and
 reinstated; an application added and retired; a template built, a check added
 and removed; settings honest about which configuration is live and free of
 secrets and paths; and a viewer refused all six.
+
+## 24. The approved workflow changes (user-directed, 2026-09-08)
+
+A user-directed review of every screen produced seventeen approved changes.
+They are not a new phase: nothing was added to the roadmap and nothing was
+removed from the database. What changed is the path an engineer walks, and who
+the system asks for what. This section records what moved, what deliberately
+did not, and what is still missing for the one integration the changes touch.
+
+### 24.1 The flow, as it now runs
+
+```
+Booking (kit + requester typed in)
+  → Checklist prepared on the booking          (required checks answered)
+  → Ready for handover                          (refused until they are)
+  → Handover: review the checklist, recipient signs, engineer signs
+  → Checked out
+  → Return Kit: received by the engineer, staff who returned it typed in
+  → Healthy: Completed, kit available
+    Problems: Completed, issue raised, kit damaged or in maintenance
+```
+
+Each arrow is a service call that re-validates its own precondition inside a
+transaction; the UI's buttons follow the same predicates from the same pure
+functions, so a screen never offers a step the service would refuse.
+
+### 24.2 What each change touched
+
+| # | Change | Where it lives |
+|---|---|---|
+| 1 | One pagination rule, server-side everywhere | `src/lib/pagination.ts`, every list parser and DAL, AD-32 |
+| 2 | Adding equipment to a kit is obvious and says why not | `asset-picker.tsx`, `kits.dal.ts` (`ASSET_CANDIDATE_LIMIT`) |
+| 3 | Software gates nothing and is out of the navigation | `handover.service.ts`, `navigation.ts`, AD-31 |
+| 4 | No booking needs an editor profile | migration, `bookings.service.ts`, AD-28 |
+| 5 | Requester name, staff ID, mobile, project, work order | `bookings` columns, `booking-requester.ts`, AD-28 |
+| 6 | "Prepared by" from the session | `createdBy`, `booking-form.tsx`, AD-30 |
+| 7 | An edit needs a reason, kept in the audit trail | `updateBookingSchema`, `updateBooking`, activity panel |
+| 8 | The checklist is answered before handover | `BookingChecklistItem.prepared*`, `markReadyForHandover`, AD-29 |
+| 9 | Engineer identity from the session only | schema drops `engineerId`, AD-30, §24.4 |
+| 10 | The recipient types a name and mobile and signs | `signature-pad.tsx`, `captureSignature` |
+| 11 | A prominent Return Kit button while the kit is out | `canReturnKit`, booking header |
+| 12 | Received by = actor, date = server, returned by = typed | `completeReturn`, `Inspection.returnedByName` |
+| 13 | Healthy return completes and frees the kit | `kitStatusAfterReturn`, unchanged issue logic |
+
+### 24.3 What was deliberately not done
+
+- **No historical data was deleted or rewritten.** `SoftwareApplication`,
+  `KitSoftware`, `SoftwareCheck` and `EditorProfile` keep every row and every
+  column. The Editors and Software routes still render; only their navigation
+  entries are gone.
+- **No applied migration was edited.** One new migration adds the requester
+  columns, the prepared-checklist columns, `Inspection.returnedByName`,
+  `Signature.signerMobile`, the nullable `editorId`/`engineerId`, the requester
+  CHECK, and `CREATE OR REPLACE` versions of the two immutability triggers so
+  the new frozen columns are frozen too.
+- **No backfill.** Bookings made before the change keep null requester columns
+  and are read through `requesterOf`, which falls back to their profile. A
+  backfill would have written today's directory values into yesterday's
+  records, which is exactly what AD-28 exists to avoid.
+- **Signatures, documents, QR codes, photos, reports, the audit log and every
+  database constraint are untouched** except where a change above adds a column
+  to them, and every addition is covered by the same immutability triggers as
+  the columns beside it.
+
+### 24.4 LDAP: what is actually there, and what is missing
+
+Authentication today is Auth.js v5 with a single Credentials provider over
+bcrypt hashes in `users.passwordHash`, plus lockout, session versioning and a
+database-backed session. **There is no LDAP or Entra integration, and none is
+faked** - no bind, no directory read, no "LDAP" label on a local password
+check. The engineer identity on a handover is the authenticated local account.
+
+To authenticate against ADM's directory later, these are the pieces that do not
+exist yet:
+
+1. **A provider.** Either an LDAP bind inside `authorize` (`ldapts` or similar,
+   bind as the user, on success load the account) or - better - an OIDC/Entra
+   provider, which removes password handling from the application entirely.
+2. **Provisioning and role mapping.** A rule that turns a directory group into
+   one of ADMIN / ENGINEER / EDITOR / VIEWER, and a decision about whether a
+   first successful sign-in creates an account or requires one to exist.
+3. **Configuration.** Server URL, bind DN and secret, base DN, user filter,
+   attribute mapping (name, mail, staff id, phone), group attribute - all as
+   validated environment variables in `src/lib/env.ts`.
+4. **Transport trust.** LDAPS or StartTLS with the corporate CA available to
+   the container, and a refusal to fall back to plaintext.
+5. **A decision about local passwords.** Whether they remain as a break-glass
+   path for named service accounts, or are disabled once the directory is live.
+6. **What does not change.** `Actor`, the permission matrix, the route policy
+   and every `requirePermission` call are provider-agnostic; a directory login
+   populates the same session shape. The audit log already records
+   `LOGIN_SUCCESS`, `LOGIN_FAILED` and `ROLE_CHANGED`, so a directory sign-in
+   lands in the existing trail without new actions.
+
+### 24.5 Tests added for the approved behaviours
+
+- `tests/unit/pagination.test.ts` - the size clamps at both ends, the page
+  floors and lands on the last page that exists, the count the footer reads,
+  and all three parser families following the same rule.
+- `tests/unit/booking-requester.test.ts` - booking data wins over the profile,
+  the profile is the fallback, a name is never blank, the form insists on name,
+  mobile, project and work order when no profile is chosen, an edit without a
+  reason is refused, and a posted `engineerId`, `createdById`, `preparedBy` or
+  `status` is dropped by the schema.
+- `tests/integration/workflow-changes.test.ts` - twenty-one tests over the whole
+  path: a booking for someone with no profile creating no profile row, the
+  optional staff ID, "prepared by" and the audit summary naming the session
+  user, no engineer assigned from a payload, the reason recorded and readable
+  as prose, the checklist gate refusing and naming the unanswered check, who
+  answered it and when, the handover reviewing the prepared answers, the
+  booking refusing to re-prepare once the handover is live, a renamed template
+  item leaving a prepared booking alone, the recipient's typed name and mobile
+  on their signature with no profile behind it, the fallback to the requester,
+  a handover completing with required software on the kit while the kit's
+  software list survives, the typed requester and work order on the frozen
+  document, the Return Kit button appearing exactly while the kit is out, a
+  healthy return completing and freeing the kit with received-by from the
+  session and a server date, the typed returner (and its default), a damaged
+  return raising an issue and keeping the kit out of service, the equipment
+  picker naming a verdict for every match (in this kit, in another kit, free,
+  or not fit to be issued) with the service holding the same line, and a legacy
+  profile-backed booking still reading and signing.
+- `tests/integration/constraints.test.ts` and `scripts/db/verify-constraints.sql`
+  gained the new database rules: a booking that names nobody is refused by
+  `bookings_requester_identified` (and cannot have its requester erased), a
+  locked return inspection refuses a rewrite of `returnedByName`, and a
+  signature refuses a rewrite of `signerMobile` or `signerStaffId`.
+- The suites that encoded the old rules were updated rather than deleted: the
+  software blockers became warnings, the handover's checklist arrives answered,
+  and `prepareChecklistFor` is applied wherever a scenario marks a booking
+  ready, exactly as the real flow does.

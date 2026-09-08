@@ -16,6 +16,7 @@ import { HandoverRecap } from '@/features/return/components/handover-recap'
 import { ReturnChecklistForm } from '@/features/return/components/return-checklist-form'
 import { CompleteReturnForm, StartReturnForm } from '@/features/return/components/return-forms'
 import { ReturnSummaryPanel } from '@/features/return/components/return-summary'
+import { requesterOf } from '@/lib/booking-requester'
 import { env } from '@/lib/env'
 import { requirePermissionForPage } from '@/server/auth/page-guards'
 import { can } from '@/server/auth/permissions'
@@ -43,6 +44,7 @@ export default async function ReturnPage({ params }: { params: Promise<{ id: str
 
   const { booking, handover, inspection, bookingBlockers, verdict, canPerform, canComplete, completed } = workspace
   const timeZone = env.APP_TIMEZONE
+  const requester = requesterOf(booking)
   const summary = completed || inspection ? await loadReturnSummary(prisma, id) : null
   const photos = inspection ? await loadInspectionPhotos(prisma, inspection.id) : []
 
@@ -80,8 +82,8 @@ export default async function ReturnPage({ params }: { params: Promise<{ id: str
           <span className="flex flex-wrap items-center gap-2">
             <span className="font-mono text-foreground">{booking.bookingNumber}</span>
             <BookingStatusBadge status={booking.status} />
-            <span className="font-medium text-foreground">{booking.editor.fullName}</span>
-            <Badge tone={booking.editor.isExternal ? 'neutral' : 'blue'}>{booking.editor.isExternal ? 'External' : 'Internal'}</Badge>
+            <span className="font-medium text-foreground">{requester.name}</span>
+            {requester.isExternal !== null ? <Badge tone={requester.isExternal ? 'neutral' : 'blue'}>{requester.isExternal ? 'External' : 'Internal'}</Badge> : null}
             <span className="text-subtle">·</span>
             <span>{booking.kit.name}</span>
           </span>
@@ -172,7 +174,7 @@ export default async function ReturnPage({ params }: { params: Promise<{ id: str
               step={3}
               id="signature"
               title="Confirmation"
-              description="The engineer receiving the kit signs on this device. The editor may sign too, but a kit dropped off without them can still be received."
+              description="The engineer receiving the kit signs on this device, as the signed-in account. The person returning it may sign too, but a kit dropped off without them can still be received."
               state={signatureState}
             >
               <div className="grid gap-4 lg:grid-cols-2">
@@ -190,13 +192,14 @@ export default async function ReturnPage({ params }: { params: Promise<{ id: str
                 <SignaturePad
                   bookingId={booking.id}
                   role="EDITOR"
-                  signerName={booking.editor.fullName}
+                  signerName={requester.name}
+                  recipient={{ name: requester.name, mobile: requester.mobile }}
                   existing={inspection.signatures.find((signature) => signature.type === 'RETURN_EDITOR') ?? null}
                   disabled={!canPerform}
                   timeZone={timeZone}
                   action={captureReturnSignatureFormAction}
-                  title="Editor returning the kit"
-                  caption=" · the editor named on the booking"
+                  title="Person returning the kit"
+                  caption=" · optional; enter their name and mobile"
                   optional
                 />
               </div>
@@ -228,7 +231,7 @@ export default async function ReturnPage({ params }: { params: Promise<{ id: str
                 </Alert>
               ) : null}
               {can(actor, 'return.complete') ? (
-                <CompleteReturnForm bookingId={booking.id} bookingNumber={booking.bookingNumber} kitCode={booking.kit.kitCode} problemCount={problemCount} ready={canComplete} />
+                <CompleteReturnForm bookingId={booking.id} bookingNumber={booking.bookingNumber} kitCode={booking.kit.kitCode} problemCount={problemCount} ready={canComplete} receivedBy={actor.name} returnedByDefault={requester.name} />
               ) : (
                 <p className="text-sm text-muted">Completing the return needs the return.complete permission.</p>
               )}

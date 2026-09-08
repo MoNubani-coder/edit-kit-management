@@ -1,10 +1,12 @@
 'use client'
 
 import { Check, Eraser, LoaderCircle, PenLine } from 'lucide-react'
-import { type FormEvent, type PointerEvent, useActionState, useCallback, useEffect, useRef, useState } from 'react'
+import { type FormEvent, type PointerEvent, useActionState, useCallback, useEffect, useId, useRef, useState } from 'react'
 
 import { Alert } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { FormField } from '@/components/ui/form-field'
+import { Input } from '@/components/ui/input'
 import { formatDateTime } from '@/lib/datetime'
 import { cn } from '@/lib/utils/cn'
 import type { SignerRoleValue } from '@/lib/validation/handover'
@@ -14,9 +16,11 @@ import type { HandoverSignatureMeta } from '@/server/dal/handover.dal'
 /**
  * In-person signature on the engineer's device. A plain <canvas> driven by
  * Pointer Events - mouse, finger and stylus alike - drawn as dark ink on a
- * white "paper" so the stored PNG reads the same in either theme. The image is
- * the only thing the form sends: who signed is decided by the server from the
- * booking (editor) or the session (engineer).
+ * white "paper" so the stored PNG reads the same in either theme. For the
+ * engineer the image is the only thing the form sends: who signed is the
+ * signed-in account, decided by the server. The recipient types their name and
+ * mobile above the pad; the server attributes the signature to that identity,
+ * and never lets those fields rename the engineer.
  *
  * The pad itself is phase-agnostic: the handover posts to its own action and
  * the return (Phase 9) passes its own through `action`, so there is one canvas
@@ -38,6 +42,7 @@ export function SignaturePad({
   title: titleOverride,
   caption,
   optional = false,
+  recipient,
 }: {
   bookingId: string
   role: SignerRoleValue
@@ -52,7 +57,10 @@ export function SignaturePad({
   caption?: string
   /** Shown when this signature is not required to complete. */
   optional?: boolean
+  /** Recipient pads only: what to pre-fill from the booking. The person may correct it. */
+  recipient?: { name: string | null; mobile: string | null }
 }) {
+  const fieldId = useId()
   const [state, formAction, pending] = useActionState<HandoverFormState, FormData>(action, null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const imageRef = useRef<HTMLInputElement>(null)
@@ -136,7 +144,7 @@ export function SignaturePad({
     if (imageRef.current) imageRef.current.value = canvas.toDataURL('image/png')
   }
 
-  const title = titleOverride ?? (role === 'EDITOR' ? 'Editor signature' : 'Engineer signature')
+  const title = titleOverride ?? (role === 'EDITOR' ? 'Recipient signature' : 'Engineer signature')
 
   return (
     <div className="theme-transition rounded-panel border border-line bg-panel">
@@ -148,7 +156,7 @@ export function SignaturePad({
           </h3>
           <p className="mt-0.5 text-xs text-muted">
             Signing as <span className="font-medium text-foreground">{signerName}</span>
-            {caption ?? (role === 'EDITOR' ? ' · the editor named on the booking' : ' · the signed-in engineer')}
+            {caption ?? (role === 'EDITOR' ? ' · the person receiving the kit, as entered below' : ' · the signed-in engineer, from your account')}
             {optional ? ' · optional' : ''}
           </p>
         </div>
@@ -189,6 +197,16 @@ export function SignaturePad({
             <input type="hidden" name="bookingId" value={bookingId} />
             <input type="hidden" name="role" value={role} />
             <input ref={imageRef} type="hidden" name="image" defaultValue="" />
+            {role === 'EDITOR' ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <FormField label="Recipient name" htmlFor={`${fieldId}-name`} required error={state && !state.ok ? state.fieldErrors?.recipientName : undefined}>
+                  <Input id={`${fieldId}-name`} name="recipientName" defaultValue={recipient?.name ?? ''} maxLength={120} required autoComplete="off" placeholder="Who is receiving the kit" />
+                </FormField>
+                <FormField label="Mobile number" htmlFor={`${fieldId}-mobile`} required error={state && !state.ok ? state.fieldErrors?.recipientMobile : undefined}>
+                  <Input id={`${fieldId}-mobile`} name="recipientMobile" defaultValue={recipient?.mobile ?? ''} maxLength={40} required inputMode="tel" autoComplete="off" placeholder="+971 5x xxx xxxx" />
+                </FormField>
+              </div>
+            ) : null}
             <div className="relative">
               <canvas
                 ref={canvasRef}

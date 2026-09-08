@@ -26,16 +26,19 @@ export async function signOut(page: Page): Promise<void> {
 export async function drawSignature(page: Page, padLabel: RegExp): Promise<void> {
   const canvas = page.getByRole('img', { name: padLabel })
   await expect(canvas).toBeVisible()
-  const box = await canvas.boundingBox()
+  // `hover` scrolls the pad into view and places the pointer inside it; the raw
+  // mouse API does neither, and a drag measured from a stale box lands on
+  // whatever happens to be at those coordinates.
+  const box = (await canvas.boundingBox()) ?? null
   if (!box) throw new Error('The signature pad has no box to draw in.')
-
-  const y = box.y + box.height / 2
-  await page.mouse.move(box.x + box.width * 0.2, y)
+  await canvas.hover({ position: { x: box.width * 0.2, y: box.height / 2 } })
   await page.mouse.down()
   for (const step of [0.3, 0.4, 0.5, 0.6, 0.7]) {
-    await page.mouse.move(box.x + box.width * step, y + (step > 0.5 ? -18 : 18))
+    await canvas.hover({ position: { x: box.width * step, y: box.height / 2 + (step > 0.5 ? -18 : 18) } })
   }
   await page.mouse.up()
+  // The pad draws a dot on pointer-down, so any registered contact shows ink.
+  await expect(canvas.locator('xpath=..').getByText('Sign here with a finger')).toHaveCount(0)
 }
 
 /** Accepts every window.confirm, which is how the lifecycle buttons ask. */

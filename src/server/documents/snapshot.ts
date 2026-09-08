@@ -25,6 +25,7 @@ export interface DocumentSignature {
   signedAt: string | null
   /** Deliberately not carried into any view model. */
   imageHash?: string | null
+  signerMobile: string | null
 }
 
 export interface DocumentAccessory {
@@ -83,9 +84,11 @@ export interface FrozenDocument {
   returnedAt: string | null
   punctuality: string | null
   minutesLate: number | null
-  editor: { name: string | null; staffId: string | null; type: string | null; contactNumber: string | null; company: string | null; department: string | null }
+  editor: { name: string | null; staffId: string | null; type: string | null; contactNumber: string | null; company: string | null; department: string | null; projectName: string | null; workOrder: string | null }
   kit: { code: string | null; name: string | null; barcode: string | null; suitcaseStatus: string | null }
-  engineer: { assigned: string | null; handedOverBy: string | null; returnReceivedBy: string | null }
+  engineer: { assigned: string | null; handedOverBy: string | null; returnReceivedBy: string | null; preparedBy: string | null }
+  /** Return only: the person who physically brought the kit back. */
+  returnedBy: string | null
   equipment: DocumentLine[]
   software: DocumentSoftware[]
   checklist: DocumentCheck[]
@@ -129,6 +132,7 @@ export function readDocument(kind: DocumentKind, snapshot: unknown): FrozenDocum
     collectedAt: str(snapshot.collectedAt) ?? str(booking.collectionDate),
     expectedReturnDate: str(booking.expectedReturnDate),
     returnedAt: str(snapshot.returnedAt),
+    returnedBy: str(snapshot.returnedBy),
     punctuality: str(snapshot.punctuality),
     minutesLate: num(snapshot.minutesLate),
     editor: {
@@ -138,9 +142,11 @@ export function readDocument(kind: DocumentKind, snapshot: unknown): FrozenDocum
       contactNumber: str(editor.contactNumber),
       company: str(editor.company),
       department: str(editor.department),
+      projectName: str(editor.projectName),
+      workOrder: str(editor.workOrder),
     },
     kit: { code: str(kit.code), name: str(kit.name), barcode: str(kit.barcode), suitcaseStatus: str(kit.suitcaseStatus) },
-    engineer: { assigned: str(engineer.assigned), handedOverBy: str(engineer.handedOverBy), returnReceivedBy: str(engineer.returnReceivedBy) },
+    engineer: { assigned: str(engineer.assigned), handedOverBy: str(engineer.handedOverBy), returnReceivedBy: str(engineer.returnReceivedBy), preparedBy: str(engineer.preparedBy) },
     equipment: arr(snapshot.equipment).map((line) => ({
       assetCode: str(line.assetCode),
       name: str(line.name),
@@ -175,7 +181,9 @@ export function readDocument(kind: DocumentKind, snapshot: unknown): FrozenDocum
     })),
     checklist: arr(snapshot.checklist).map((entry) => ({ label: str(entry.label), required: bool(entry.required), status: str(entry.status), notes: str(entry.notes) })),
     generalNotes: str(snapshot.generalNotes),
-    signatures: arr(snapshot.signatures).map((signature) => ({ type: str(signature.type) ?? '', signerName: str(signature.signerName), signedAt: str(signature.signedAt) })),
+    signatures: arr(snapshot.signatures).map((signature) => ({ type: str(signature.type) ?? '', signerName: str(signature.signerName), signedAt: str(signature.signedAt),
+      signerMobile: str(signature.signerMobile),
+    })),
     measuredAgainst: Object.keys(handover).length > 0 ? { completedAt: str(handover.completedAt), lineCount: num(handover.lineCount) } : null,
   }
 }

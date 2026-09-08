@@ -3,6 +3,7 @@ import 'server-only'
 import { type AuditAction, IssueSeverity, IssueStatus, type IssueType, type MaintenanceStatus, type Prisma, UserStatus } from '@prisma/client'
 
 import type { IssueFilter, IssueListParams } from '@/lib/validation/issues'
+import { clampPage, pageCountFor } from '@/lib/pagination'
 import type { Db } from '@/server/db/prisma'
 
 /**
@@ -151,18 +152,12 @@ export async function listIssuesPage(db: Db, actorUserId: string, params: IssueL
   const clauses = [issueFilterWhere(params.filter, actorUserId), params.q ? searchWhere(params.q) : null].filter((clause): clause is Prisma.IssueWhereInput => clause !== null)
   const where: Prisma.IssueWhereInput = clauses.length > 0 ? { AND: clauses } : {}
 
-  const [total, records] = await Promise.all([
-    db.issue.count({ where }),
-    db.issue.findMany({ where, select: listSelect, orderBy: orderBy(params), skip: (params.page - 1) * params.pageSize, take: params.pageSize }),
-  ])
+  const total = await db.issue.count({ where })
+  const pageCount = pageCountFor(total, params.pageSize)
+  const page = clampPage(params.page, pageCount)
+  const records = await db.issue.findMany({ where, select: listSelect, orderBy: orderBy(params), skip: (page - 1) * params.pageSize, take: params.pageSize })
 
-  return {
-    rows: records.map(toListRow),
-    total,
-    page: params.page,
-    pageSize: params.pageSize,
-    pageCount: Math.max(1, Math.ceil(total / params.pageSize)),
-  }
+  return { rows: records.map(toListRow), total, page, pageSize: params.pageSize, pageCount }
 }
 
 export async function countIssuesByFilter(db: Db, actorUserId: string): Promise<Record<IssueFilter, number>> {
@@ -254,7 +249,7 @@ export async function getIssueDetail(db: Db, id: string): Promise<IssueDetail | 
       asset: { select: { id: true, assetCode: true, name: true, serialNumber: true, status: true } },
       accessory: { select: { id: true, label: true, accessoryType: { select: { name: true } } } },
       kit: { select: { id: true, kitCode: true, name: true } },
-      booking: { select: { id: true, bookingNumber: true, status: true, editor: { select: { fullName: true } } } },
+      booking: { select: { id: true, bookingNumber: true, status: true, requesterName: true, editor: { select: { fullName: true } } } },
       inspection: { select: { id: true, type: true, completedAt: true } },
       attachments: {
         where: { deletedAt: null },
@@ -288,7 +283,7 @@ export async function getIssueDetail(db: Db, id: string): Promise<IssueDetail | 
     asset: issue.asset,
     accessory: issue.accessory ? { id: issue.accessory.id, label: issue.accessory.label, typeName: issue.accessory.accessoryType.name } : null,
     kit: issue.kit,
-    booking: issue.booking ? { id: issue.booking.id, bookingNumber: issue.booking.bookingNumber, editorName: issue.booking.editor.fullName, status: issue.booking.status } : null,
+    booking: issue.booking ? { id: issue.booking.id, bookingNumber: issue.booking.bookingNumber, editorName: issue.booking.requesterName ?? issue.booking.editor?.fullName ?? 'Unnamed requester', status: issue.booking.status } : null,
     inspection: issue.inspection,
     photos: issue.attachments.map((attachment) => ({
       id: attachment.id,

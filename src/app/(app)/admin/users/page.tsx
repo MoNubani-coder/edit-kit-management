@@ -16,7 +16,7 @@ import { UserRoleControl, UserStatusControl, UserUnlockControl } from '@/feature
 import { ROLE_LABELS } from '@/lib/constants/roles'
 import { formatDate, formatDateTime } from '@/lib/datetime'
 import { env } from '@/lib/env'
-import { USER_FILTER_LABELS, USER_FILTERS, USER_ROLES, USER_STATUS_LABELS, type UserStatusValue, parseUserListParams, usersHref } from '@/lib/validation/admin'
+import { USER_DEFAULT_PAGE_SIZE, USER_FILTER_LABELS, USER_FILTERS, USER_ROLES, USER_STATUS_LABELS, type UserStatusValue, parseUserListParams, usersHref } from '@/lib/validation/admin'
 import { requirePermissionForPage } from '@/server/auth/page-guards'
 import { countUsersByFilter, listUsersPage } from '@/server/dal/admin.dal'
 import { prisma } from '@/server/db/prisma'
@@ -83,6 +83,9 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: P
 
         <form method="get" action="/admin/users" className="theme-transition flex flex-wrap items-end gap-3 rounded-panel border border-line bg-panel p-4">
           {params.filter !== 'all' ? <input type="hidden" name="filter" value={params.filter} /> : null}
+          {/* A new question starts at the first page, but keeps the chosen page size. */}
+          <input type="hidden" name="page" value="1" />
+          {params.pageSize !== USER_DEFAULT_PAGE_SIZE ? <input type="hidden" name="pageSize" value={params.pageSize} /> : null}
           <div className="min-w-56 flex-1">
             <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.12em] text-subtle" htmlFor="user-q">
               Search

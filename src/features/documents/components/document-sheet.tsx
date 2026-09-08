@@ -90,12 +90,16 @@ export function DocumentSheet({
           <Field label="Editor" value={document.editor.name ?? '—'} />
           <Field label="Mobile" value={document.editor.contactNumber ?? '—'} />
           <Field label="Staff ID" value={document.editor.staffId ?? '—'} />
-          <Field label={document.editor.type === 'EXTERNAL' ? 'Company' : 'Department'} value={document.editor.company ?? document.editor.department ?? '—'} />
-          <Field label="Assigned engineer" value={document.engineer.assigned ?? '—'} />
+          {document.editor.type ? <Field label={document.editor.type === 'EXTERNAL' ? 'Company' : 'Department'} value={document.editor.company ?? document.editor.department ?? '—'} /> : null}
+          {document.editor.projectName ? <Field label="Project" value={document.editor.projectName} /> : null}
+          {document.editor.workOrder ? <Field label="Work order" value={document.editor.workOrder} /> : null}
+          {document.engineer.preparedBy ? <Field label="Prepared by" value={document.engineer.preparedBy} /> : null}
+          {document.engineer.assigned ? <Field label="Assigned engineer" value={document.engineer.assigned} /> : null}
           <Field label={isReturn ? 'Return received by' : 'Handed over by'} value={(isReturn ? document.engineer.returnReceivedBy : document.engineer.handedOverBy) ?? '—'} />
           <Field label="Collected" value={when(document.collectedAt, timeZone)} />
           <Field label="Expected return" value={when(document.expectedReturnDate, timeZone)} />
           {isReturn ? <Field label="Actual return" value={when(document.returnedAt, timeZone)} /> : null}
+          {isReturn && document.returnedBy ? <Field label="Returned by" value={document.returnedBy} /> : null}
           {isReturn ? (
             <Field
               label="Punctuality"
@@ -232,6 +236,7 @@ export function DocumentSheet({
                 </div>
                 <div className="mt-1 border-t border-slate-300 pt-1">
                   <p className="text-[12px] font-semibold">{signature.signerName ?? '—'}</p>
+                  {signature.signerMobile ? <p className="text-[11px] text-slate-600">{signature.signerMobile}</p> : null}
                   <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">
                     {signature.type.replace(/_/g, ' ').toLowerCase()} · {when(signature.signedAt, timeZone)}
                   </p>

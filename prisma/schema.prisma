@@ -292,6 +292,8 @@ model User {
   attachmentsUploaded  Attachment[]        @relation("AttachmentUploadedBy")
   auditLogs            AuditLog[]          @relation("AuditActor")
   settingsUpdated      AppSetting[]        @relation("SettingUpdatedBy")
+  checklistsPrepared   Booking[]           @relation("BookingChecklistPreparedBy")
+  checklistItemsPrepared BookingChecklistItem[] @relation("ChecklistItemPreparedBy")
   assetStatusChanges   AssetStatusLog[]    @relation("AssetStatusChangedBy")
   maintenanceCreated   MaintenanceRecord[] @relation("MaintenanceCreatedBy")
   maintenanceUpdated   MaintenanceRecord[] @relation("MaintenanceUpdatedBy")
@@ -708,9 +710,25 @@ model Booking {
   id            String        @id @default(cuid())
   bookingNumber String        @unique
   kitId         String
-  editorId      String
-  engineerId    String
+  /// Optional since the requester became manual booking data. Historical
+  /// bookings keep their profile; new ones carry the requester columns below.
+  editorId      String?
+  /// Optional: the preparer is the authenticated user (createdBy). Set when
+  /// that user has an engineer profile, for the assignment reports.
+  engineerId    String?
   status        BookingStatus @default(DRAFT)
+
+  /// Who the kit is for, as typed when the booking was made. Booking-level
+  /// snapshot: never re-derived from any profile afterwards.
+  requesterName    String?
+  requesterStaffId String?
+  requesterMobile  String?
+  projectName      String?
+  workOrder        String?
+
+  /// The pre-handover checklist was completed at this time by this user.
+  checklistPreparedAt   DateTime? @db.Timestamptz(3)
+  checklistPreparedById String?
 
   bookingStart       DateTime  @db.Timestamptz(3)
   bookingEnd         DateTime  @db.Timestamptz(3)
@@ -735,12 +753,13 @@ model Booking {
   createdAt DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt DateTime  @updatedAt @db.Timestamptz(3)
 
-  kit               Kit                @relation(fields: [kitId], references: [id], onDelete: Restrict)
-  editor            EditorProfile      @relation(fields: [editorId], references: [id], onDelete: Restrict)
-  engineer          EngineerProfile    @relation(fields: [engineerId], references: [id], onDelete: Restrict)
-  checklistTemplate ChecklistTemplate? @relation(fields: [checklistTemplateId], references: [id], onDelete: SetNull)
-  createdBy         User               @relation("BookingCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  updatedBy         User?              @relation("BookingUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  kit                 Kit                @relation(fields: [kitId], references: [id], onDelete: Restrict)
+  editor              EditorProfile?     @relation(fields: [editorId], references: [id], onDelete: Restrict)
+  engineer            EngineerProfile?   @relation(fields: [engineerId], references: [id], onDelete: Restrict)
+  checklistTemplate   ChecklistTemplate? @relation(fields: [checklistTemplateId], references: [id], onDelete: SetNull)
+  createdBy           User               @relation("BookingCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy           User?              @relation("BookingUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  checklistPreparedBy User?              @relation("BookingChecklistPreparedBy", fields: [checklistPreparedById], references: [id], onDelete: SetNull)
 
   inspections     Inspection[]
   checklistItems  BookingChecklistItem[]
@@ -771,10 +790,18 @@ model BookingChecklistItem {
   isRequired           Boolean        @default(true)
   sortOrder            Int            @default(0)
 
+  /// The answer given while preparing the booking, before any inspection
+  /// exists. Seeded into the handover inspection's results when it starts.
+  preparedStatus ChecklistStatus?
+  preparedNotes  String?
+  preparedAt     DateTime? @db.Timestamptz(3)
+  preparedById   String?
+
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   booking            Booking                @relation(fields: [bookingId], references: [id], onDelete: Cascade)
   sourceTemplateItem ChecklistTemplateItem? @relation(fields: [sourceTemplateItemId], references: [id], onDelete: SetNull)
+  preparedBy         User?                  @relation("ChecklistItemPreparedBy", fields: [preparedById], references: [id], onDelete: SetNull)
   results            ChecklistResult[]
 
   @@index([bookingId, sortOrder])
@@ -805,6 +832,10 @@ model Inspection {
   /// Set when the inspection is completed and both signatures are present.
   /// A locked inspection is rejected by every normal write path.
   lockedAt DateTime? @db.Timestamptz(3)
+
+  /// Return only: the person who physically brought the kit back, typed by
+  /// the receiving engineer. Frozen with the inspection by the lock trigger.
+  returnedByName String?
 
   /// Frozen render-ready copy of the whole document (booking, editor,
   /// engineer, kit, lines, checklist, software) captured at completion so the
@@ -965,6 +996,8 @@ model Signature {
   /// Name/staff id as displayed at signing time.
   signerName    String
   signerStaffId String?
+  /// The recipient's mobile as typed at signing. Frozen by the trigger.
+  signerMobile  String?
 
   storageProvider StorageProvider @default(LOCAL)
   imagePath       String

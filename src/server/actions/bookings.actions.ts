@@ -3,13 +3,14 @@
 import { redirect } from 'next/navigation'
 import { z } from 'zod'
 
-import { cancelBookingSchema, createBookingSchema, formDataToObject, updateBookingSchema } from '@/lib/validation/bookings'
+import { cancelBookingSchema, createBookingSchema, formDataToObject, parseChecklistFields, prepareChecklistSchema, updateBookingSchema } from '@/lib/validation/bookings'
 import { action, type ActionResult } from '@/server/auth/action'
 import { prisma } from '@/server/db/prisma'
 import {
   cancelBooking,
   createBooking,
   markReadyForHandover,
+  prepareChecklist,
   reserveBooking,
   returnToDraft,
   revertReadyForHandover,
@@ -51,6 +52,24 @@ const updateBookingAction = action({
 
 export async function updateBookingFormAction(_previous: BookingFormState, formData: FormData): Promise<BookingFormState> {
   return updateBookingAction(formDataToObject(formData))
+}
+
+/**
+ * The pre-handover checklist. `booking.update` rather than `handover.perform`:
+ * preparing a booking is booking work, done before any handover exists.
+ */
+const prepareChecklistAction = action({
+  permission: 'booking.update',
+  schema: prepareChecklistSchema.extend(id.shape),
+  async handler({ actor, input }) {
+    await prepareChecklist(prisma, actor, input.id, { checks: input.checks })
+    redirect(`/bookings/${input.id}?tab=checklist`)
+  },
+})
+
+export async function prepareChecklistFormAction(_previous: BookingFormState, formData: FormData): Promise<BookingFormState> {
+  const raw = formDataToObject(formData)
+  return prepareChecklistAction({ id: raw.id, ...parseChecklistFields(raw) })
 }
 
 const reserveBookingAction = action({

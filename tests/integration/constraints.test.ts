@@ -112,6 +112,33 @@ async function makeBooking(
   return booking.id
 }
 
+/**
+ * A booking that names its requester the way the form now does, with no editor
+ * profile behind it - or, with `requester: null`, one that names nobody, which
+ * the CHECK has to refuse.
+ */
+async function makeTypedBooking(tx: Db, fx: Fixture, options: { requester?: string | null } = {}): Promise<string> {
+  const requester = options.requester === undefined ? `Typed requester ${tag()}` : options.requester
+  const booking = await tx.booking.create({
+    data: {
+      bookingNumber: `CON-BK-${tag()}`,
+      kitId: fx.kitId,
+      status: BookingStatus.RESERVED,
+      bookingStart: at(20),
+      bookingEnd: at(22),
+      collectionDate: at(20),
+      expectedReturnDate: at(22),
+      createdById: fx.userId,
+      requesterName: requester,
+      requesterMobile: requester ? '+971 50 111 2222' : null,
+      projectName: requester ? 'Constraint project' : null,
+      workOrder: requester ? `WO-${tag()}` : null,
+    },
+    select: { id: true },
+  })
+  return booking.id
+}
+
 async function makeInspection(tx: Db, fx: Fixture, bookingId: string, options: { type?: InspectionType; locked?: boolean; voided?: boolean } = {}): Promise<string> {
   const inspection = await tx.inspection.create({
     data: {
@@ -449,6 +476,80 @@ describe('signatures', () => {
       await tx.signature.update({ where: { id: signatureId }, data: { voidedAt: new Date(), voidedById: fx.userId, voidReason: 'signed on the wrong line' } })
       await makeSignature(tx, fx, bookingId, inspectionId)
     })
+  })
+})
+
+// -----------------------------------------------------------------------------
+// 3b. Every booking names somebody, and the new frozen columns stay frozen
+// -----------------------------------------------------------------------------
+
+describe('who a booking is for', () => {
+  it('accepts a booking that carries its own requester and no editor profile', async () => {
+    await accepts(async (tx) => {
+      const fx = await fixture(tx)
+      const bookingId = await makeTypedBooking(tx, fx)
+      const row = await tx.booking.findUniqueOrThrow({ where: { id: bookingId }, select: { editorId: true, requesterName: true } })
+      expect(row.editorId).toBeNull()
+      expect(row.requesterName).toBeTruthy()
+    })
+  })
+
+  it('still accepts the legacy shape: an editor profile and no typed requester', async () => {
+    await accepts(async (tx) => {
+      const fx = await fixture(tx)
+      await makeBooking(tx, fx, { start: at(30), end: at(32), expectedReturn: at(32) })
+    })
+  })
+
+  it('refuses a booking that names nobody at all', async () => {
+    const message = await refuses(async (tx) => {
+      const fx = await fixture(tx)
+      await makeTypedBooking(tx, fx, { requester: null })
+    })
+    expect(message).toMatch(/bookings_requester_identified/i)
+  })
+
+  it('refuses to erase the requester from a booking that has no profile either', async () => {
+    const message = await refuses(async (tx) => {
+      const fx = await fixture(tx)
+      const bookingId = await makeTypedBooking(tx, fx)
+      await tx.booking.update({ where: { id: bookingId }, data: { requesterName: null } })
+    })
+    expect(message).toMatch(/bookings_requester_identified/i)
+  })
+})
+
+describe('the columns the workflow changes added', () => {
+  it('refuses to rewrite who returned the kit once the inspection is locked', async () => {
+    const message = await refuses(async (tx) => {
+      const fx = await fixture(tx)
+      const bookingId = await makeBooking(tx, fx, { status: BookingStatus.COMPLETED })
+      const inspectionId = await makeInspection(tx, fx, bookingId, { type: InspectionType.RETURN, locked: true })
+      await tx.inspection.update({ where: { id: inspectionId }, data: { returnedByName: 'Somebody Else' } })
+    })
+    expect(message).toMatch(/is locked and cannot be modified/i)
+  })
+
+  it('records who returned the kit while the inspection is still open', async () => {
+    await accepts(async (tx) => {
+      const fx = await fixture(tx)
+      const bookingId = await makeBooking(tx, fx, { status: BookingStatus.RETURN_INSPECTION })
+      const inspectionId = await makeInspection(tx, fx, bookingId, { type: InspectionType.RETURN })
+      await tx.inspection.update({ where: { id: inspectionId }, data: { returnedByName: 'Runner Rashid' } })
+    })
+  })
+
+  it("refuses to rewrite a recipient's typed mobile or staff ID after they signed", async () => {
+    for (const data of [{ signerMobile: '+971 50 000 0000' }, { signerStaffId: 'REWRITTEN' }]) {
+      const message = await refuses(async (tx) => {
+        const fx = await fixture(tx)
+        const bookingId = await makeBooking(tx, fx, { status: BookingStatus.CHECKED_OUT })
+        const inspectionId = await makeInspection(tx, fx, bookingId)
+        const signatureId = await makeSignature(tx, fx, bookingId, inspectionId, SignatureType.HANDOVER_EDITOR)
+        await tx.signature.update({ where: { id: signatureId }, data })
+      })
+      expect(message).toMatch(/is immutable/i)
+    }
   })
 })
 

@@ -19,6 +19,7 @@ import { memoryPhotoStore } from '@/server/storage/photo-store'
 import { memorySignatureStore } from '@/server/storage/signature-store'
 
 import { actorFor, createTestUser, testDb, type TestUser, withRollback } from '../helpers/db'
+import { prepareChecklistFor } from '../helpers/checklist'
 
 /**
  * Optional photo evidence, against the real database inside rolled-back
@@ -110,6 +111,7 @@ async function scenario(tx: Db, fx: Fixtures, options: { stage: 'handover-open' 
     notes: undefined,
     intent: 'reserve',
   })
+  await prepareChecklistFor(tx, fx.actor, booking.id)
   await markReadyForHandover(tx, fx.actor, booking.id)
   await startHandover(tx, fx.engineer, booking.id)
   if (options.stage === 'handover-open') return { bookingId: booking.id, kitId: kit.id, assetId: asset.id }

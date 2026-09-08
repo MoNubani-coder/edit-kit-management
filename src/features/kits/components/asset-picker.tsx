@@ -1,10 +1,11 @@
-import { ScanBarcode, Search, X } from 'lucide-react'
+import { CheckCircle2, Info, ScanBarcode, Search, X } from 'lucide-react'
 import Link from 'next/link'
 
 import { AssetStatusBadge } from '@/components/common/status-badge'
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { ASSET_CANDIDATE_LIMIT } from '@/lib/validation/kits'
 import type { AssetCandidateRow } from '@/server/services/kits.service'
 
 import { AddMemberForm } from './member-forms'
@@ -20,13 +21,14 @@ const TD = 'px-4 py-3 align-middle'
 export function AssetPicker({ kitId, term, candidates, closeHref }: { kitId: string; term: string; candidates: AssetCandidateRow[]; closeHref: string }) {
   const searched = term.trim().length > 0
   const eligible = candidates.filter((candidate) => !candidate.blocker).length
+  const truncated = candidates.length >= ASSET_CANDIDATE_LIMIT
 
   return (
     <section className="theme-transition rounded-panel border border-accent/40 bg-panel">
       <header className="flex items-start justify-between gap-4 border-b border-line bg-panel-header px-5 py-3">
         <div>
           <h3 className="font-display text-[15px] font-semibold text-foreground">Add equipment</h3>
-          <p className="mt-0.5 text-xs text-muted">Scan an ADM barcode, or search by asset code, serial number, manufacturer or model. Only available equipment that is not in another kit can be added.</p>
+          <p className="mt-0.5 text-xs text-muted">Scan an ADM barcode, or search by asset code, serial number, manufacturer, model or name. Each result says whether it can join this kit, and why not if it cannot.</p>
         </div>
         <Link href={closeHref} aria-label="Close" className={buttonVariants({ variant: 'ghost', size: 'icon' })}>
           <X aria-hidden className="h-4 w-4" />
@@ -57,7 +59,8 @@ export function AssetPicker({ kitId, term, candidates, closeHref }: { kitId: str
       ) : (
         <div className="overflow-x-auto border-t border-line">
           <p className="px-5 pt-3 text-xs text-muted">
-            {candidates.length} {candidates.length === 1 ? 'match' : 'matches'} · {eligible} can be added
+            {truncated ? `First ${ASSET_CANDIDATE_LIMIT} matches` : `${candidates.length} ${candidates.length === 1 ? 'match' : 'matches'}`} · {eligible} can be added
+            {truncated ? <span className="ml-1 text-amber-800 dark:text-amber-300">· narrow the search to see the rest</span> : null}
           </p>
           <table className="min-w-full text-sm">
             <thead>
@@ -101,9 +104,19 @@ export function AssetPicker({ kitId, term, candidates, closeHref }: { kitId: str
                   </td>
                   <td className={`${TD} text-right`}>
                     {candidate.blocker ? (
-                      <p className="max-w-xs text-xs text-muted sm:ml-auto">{candidate.blocker}</p>
+                      candidate.currentKit?.id === kitId ? (
+                        <p className="flex items-center justify-end gap-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+                          <CheckCircle2 aria-hidden className="h-4 w-4" />
+                          Already in this kit
+                        </p>
+                      ) : (
+                        <p role="note" className="flex max-w-xs items-start justify-end gap-1.5 text-xs text-amber-800 dark:text-amber-300 sm:ml-auto">
+                          <Info aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />
+                          <span>{candidate.blocker}</span>
+                        </p>
+                      )
                     ) : (
-                      <AddMemberForm kitId={kitId} assetId={candidate.id} assetCode={candidate.assetCode} />
+                      <AddMemberForm kitId={kitId} assetId={candidate.id} assetCode={candidate.assetCode} pick={term} />
                     )}
                   </td>
                 </tr>

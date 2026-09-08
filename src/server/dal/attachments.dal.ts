@@ -156,7 +156,7 @@ export async function getSignatureFileInternal(db: Db, id: string): Promise<Stor
 }
 
 /** The booking a file hangs off, for the authorisation check. */
-export async function getFileBookingScope(db: Db, bookingId: string): Promise<{ id: string; editorId: string; deleted: boolean } | null> {
+export async function getFileBookingScope(db: Db, bookingId: string): Promise<{ id: string; editorId: string | null; deleted: boolean } | null> {
   const booking = await db.booking.findUnique({ where: { id: bookingId }, select: { id: true, editorId: true, deletedAt: true } })
   return booking ? { id: booking.id, editorId: booking.editorId, deleted: booking.deletedAt !== null } : null
 }

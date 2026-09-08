@@ -104,6 +104,11 @@ export type ChecklistVerificationInput = z.output<typeof checklistVerificationSc
 /** A 640×240 PNG from the pad is ~20 KB; this leaves room without inviting abuse. */
 export const SIGNATURE_MAX_DATA_URL_CHARS = 400_000
 
+/**
+ * The recipient signs with a typed name and mobile; the engineer's identity is
+ * never posted - it comes from the session. The service enforces which role
+ * the two text fields belong to, so a client cannot rename the engineer.
+ */
 export const signatureSchema = z.object({
   role: z.enum(SIGNER_ROLES),
   image: z
@@ -111,6 +116,8 @@ export const signatureSchema = z.object({
     .min(1, 'Sign before saving.')
     .max(SIGNATURE_MAX_DATA_URL_CHARS, 'The signature image is too large.')
     .regex(/^data:image\/png;base64,[A-Za-z0-9+/=]+$/, 'The signature must be a PNG image.'),
+  recipientName: optionalText(120),
+  recipientMobile: optionalText(40),
 })
 export type SignatureInput = z.output<typeof signatureSchema>
 

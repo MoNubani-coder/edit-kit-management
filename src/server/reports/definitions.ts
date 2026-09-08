@@ -48,9 +48,15 @@ const bookingSelect = {
   expectedReturnDate: true,
   actualReturnDate: true,
   purpose: true,
+  requesterName: true,
+  requesterStaffId: true,
+  requesterMobile: true,
+  projectName: true,
+  workOrder: true,
   kit: { select: { kitCode: true, name: true } },
   editor: { select: { fullName: true, staffId: true, contactNumber: true, isExternal: true } },
   engineer: { select: { fullName: true } },
+  createdBy: { select: { name: true } },
 } satisfies Prisma.BookingSelect
 
 const BOOKING_COLUMNS: ColumnDef[] = [
@@ -72,9 +78,9 @@ function bookingRow(record: BookingRecord): ReportRow {
     bookingNumber: record.bookingNumber,
     kitCode: record.kit.kitCode,
     kitName: record.kit.name,
-    editor: record.editor.fullName,
-    mobile: record.editor.contactNumber,
-    staffId: record.editor.staffId,
+    editor: record.requesterName ?? record.editor?.fullName ?? 'Unnamed requester',
+    mobile: record.requesterMobile ?? record.editor?.contactNumber ?? null,
+    staffId: record.requesterStaffId ?? record.editor?.staffId ?? null,
     collected: record.collectionDate,
     expectedReturn: record.expectedReturnDate,
   }
@@ -95,14 +101,14 @@ const checkedOut: ReportDefinition = {
   async run(db, params) {
     const where = bookingWhere(params, [{ status: { in: [...OUT_STATUSES] } }])
     const total = await db.booking.count({ where })
-    const { skip, take, pageCount } = paginate(params.page, params.pageSize, total)
+    const { skip, take, pageCount, page } = paginate(params.page, params.pageSize, total)
     const records = await db.booking.findMany({ where, select: bookingSelect, orderBy: [{ expectedReturnDate: 'asc' }], skip, take })
 
     const rows = records.map((record) => {
       const lateBy = Math.max(0, params.now.getTime() - record.expectedReturnDate.getTime())
       return {
         ...bookingRow(record),
-        engineer: record.engineer.fullName,
+        engineer: (record.engineer?.fullName ?? record.createdBy.name),
         daysOut: record.collectionDate ? Math.floor((params.now.getTime() - record.collectionDate.getTime()) / 86_400_000) : null,
         late: lateBy > 0,
         daysLate: lateBy > 0 ? Math.floor(lateBy / 86_400_000) : 0,
@@ -119,7 +125,7 @@ const checkedOut: ReportDefinition = {
       ],
       rows,
       total,
-      page: params.page,
+      page,
       pageSize: params.pageSize,
       pageCount,
       summary: `${plural(total, 'kit')} out with editors${rows.some((row) => row.late) ? `, ${rows.filter((row) => row.late).length} of them late on this page` : ''}.`,
@@ -141,7 +147,7 @@ const dueReturns: ReportDefinition = {
     }
     const where = bookingWhere(params, [{ status: { in: [...OUT_STATUSES] } }, window])
     const total = await db.booking.count({ where })
-    const { skip, take, pageCount } = paginate(params.page, params.pageSize, total)
+    const { skip, take, pageCount, page } = paginate(params.page, params.pageSize, total)
     const records = await db.booking.findMany({ where, select: bookingSelect, orderBy: [{ expectedReturnDate: 'asc' }], skip, take })
 
     const rows = records.map((record) => ({
@@ -153,7 +159,7 @@ const dueReturns: ReportDefinition = {
       columns: [...BOOKING_COLUMNS, { key: 'hoursUntilDue', label: 'Hours until due', kind: 'number', numeric: true }],
       rows,
       total,
-      page: params.page,
+      page,
       pageSize: params.pageSize,
       pageCount,
       summary: `${plural(total, 'return')} due${params.from || params.to ? ' in the chosen window' : ' from now on'}.`,
@@ -172,12 +178,12 @@ const overdue: ReportDefinition = {
   async run(db, params) {
     const where = bookingWhere(params, [overdueWhere(params.now)])
     const total = await db.booking.count({ where })
-    const { skip, take, pageCount } = paginate(params.page, params.pageSize, total)
+    const { skip, take, pageCount, page } = paginate(params.page, params.pageSize, total)
     const records = await db.booking.findMany({ where, select: bookingSelect, orderBy: [{ expectedReturnDate: 'asc' }], skip, take })
 
     const rows = records.map((record) => ({
       ...bookingRow(record),
-      engineer: record.engineer.fullName,
+      engineer: (record.engineer?.fullName ?? record.createdBy.name),
       daysLate: Math.floor((params.now.getTime() - record.expectedReturnDate.getTime()) / 86_400_000),
       hoursLate: Math.round((params.now.getTime() - record.expectedReturnDate.getTime()) / 3_600_000),
     }))
@@ -191,7 +197,7 @@ const overdue: ReportDefinition = {
       ],
       rows,
       total,
-      page: params.page,
+      page,
       pageSize: params.pageSize,
       pageCount,
       summary: total === 0 ? 'Nothing is overdue.' : `${plural(total, 'booking')} past the expected return.`,
@@ -222,7 +228,7 @@ const bookingHistory: ReportDefinition = {
     }
     const where = bookingWhere(params, extra)
     const total = await db.booking.count({ where })
-    const { skip, take, pageCount } = paginate(params.page, params.pageSize, total)
+    const { skip, take, pageCount, page } = paginate(params.page, params.pageSize, total)
     const records = await db.booking.findMany({ where, select: bookingSelect, orderBy: [{ bookingStart: 'desc' }], skip, take })
 
     const rows = records.map((record) => ({
@@ -248,7 +254,7 @@ const bookingHistory: ReportDefinition = {
       ],
       rows,
       total,
-      page: params.page,
+      page,
       pageSize: params.pageSize,
       pageCount,
       summary: `${plural(total, 'booking')}${params.from || params.to ? ' in the chosen window' : ''}.`,
@@ -271,7 +277,7 @@ const kitUtilisation: ReportDefinition = {
       ...(params.search ? { OR: [{ kitCode: { contains: params.search, mode: 'insensitive' } }, { name: { contains: params.search, mode: 'insensitive' } }] } : {}),
     }
     const total = await db.kit.count({ where: kitWhere })
-    const { skip, take, pageCount } = paginate(params.page, params.pageSize, total)
+    const { skip, take, pageCount, page } = paginate(params.page, params.pageSize, total)
 
     const window: Prisma.BookingWhereInput = {
       deletedAt: null,
@@ -338,7 +344,7 @@ const kitUtilisation: ReportDefinition = {
       ],
       rows,
       total,
-      page: params.page,
+      page,
       pageSize: params.pageSize,
       pageCount,
       summary: `${plural(total, 'kit')}${params.from || params.to ? ', counting bookings that started in the chosen window' : ''}.`,
@@ -363,7 +369,7 @@ const editorHistory: ReportDefinition = {
         : {}),
     }
     const total = await db.editorProfile.count({ where: editorWhere })
-    const { skip, take, pageCount } = paginate(params.page, params.pageSize, total)
+    const { skip, take, pageCount, page } = paginate(params.page, params.pageSize, total)
 
     const window: Prisma.BookingWhereInput = {
       deletedAt: null,
@@ -420,7 +426,7 @@ const editorHistory: ReportDefinition = {
       ],
       rows,
       total,
-      page: params.page,
+      page,
       pageSize: params.pageSize,
       pageCount,
       summary: `${plural(total, 'editor')}${params.from || params.to ? ', counting bookings in the chosen window' : ''}.`,
@@ -449,7 +455,7 @@ const inspectionRecords: ReportDefinition = {
 
     const where: Prisma.InspectionWhereInput = { AND: clauses }
     const total = await db.inspection.count({ where })
-    const { skip, take, pageCount } = paginate(params.page, params.pageSize, total)
+    const { skip, take, pageCount, page } = paginate(params.page, params.pageSize, total)
     const records = await db.inspection.findMany({
       where,
       orderBy: [{ completedAt: 'desc' }],
@@ -461,7 +467,7 @@ const inspectionRecords: ReportDefinition = {
         completedAt: true,
         suitcaseStatus: true,
         completedBy: { select: { name: true } },
-        booking: { select: { id: true, bookingNumber: true, kit: { select: { kitCode: true } }, editor: { select: { fullName: true } } } },
+        booking: { select: { id: true, bookingNumber: true, requesterName: true, kit: { select: { kitCode: true } }, editor: { select: { fullName: true } } } },
         assetInspections: { select: { status: true } },
         signatures: { where: { voidedAt: null }, select: { type: true } },
         _count: { select: { attachments: { where: { deletedAt: null } }, issues: true } },
@@ -475,7 +481,7 @@ const inspectionRecords: ReportDefinition = {
         bookingNumber: record.booking.bookingNumber,
         type: record.type === 'HANDOVER' ? 'Handover' : 'Return',
         kitCode: record.booking.kit.kitCode,
-        editor: record.booking.editor.fullName,
+        editor: (record.booking.requesterName ?? record.booking.editor?.fullName ?? 'Unnamed requester'),
         completedAt: record.completedAt,
         completedBy: record.completedBy?.name ?? null,
         items: lines.length,
@@ -506,7 +512,7 @@ const inspectionRecords: ReportDefinition = {
       ],
       rows,
       total,
-      page: params.page,
+      page,
       pageSize: params.pageSize,
       pageCount,
       summary: `${plural(total, 'completed document')} on record.`,
@@ -546,7 +552,7 @@ const missingDamaged: ReportDefinition = {
         : {}),
     }
     const total = await db.asset.count({ where })
-    const { skip, take, pageCount } = paginate(params.page, params.pageSize, total)
+    const { skip, take, pageCount, page } = paginate(params.page, params.pageSize, total)
     const assets = await db.asset.findMany({
       where,
       orderBy: [{ status: 'asc' }, { assetCode: 'asc' }],
@@ -563,7 +569,7 @@ const missingDamaged: ReportDefinition = {
           where: { toStatus: { in: statuses } },
           orderBy: [{ createdAt: 'desc' }],
           take: 1,
-          select: { createdAt: true, reason: true, booking: { select: { bookingNumber: true, editor: { select: { fullName: true } } } } },
+          select: { createdAt: true, reason: true, booking: { select: { bookingNumber: true, requesterName: true, editor: { select: { fullName: true } } } } },
         },
         issues: { where: { status: { in: [...OPEN_ISSUES] } }, orderBy: [{ reportedAt: 'desc' }], take: 1, select: { issueNumber: true, severity: true } },
       },
@@ -581,7 +587,7 @@ const missingDamaged: ReportDefinition = {
         serialNumber: asset.serialNumber,
         since: log?.createdAt ?? null,
         booking: log?.booking?.bookingNumber ?? null,
-        editor: log?.booking?.editor.fullName ?? null,
+        editor: log?.booking?.requesterName ?? log?.booking?.editor?.fullName ?? null,
         reason: log?.reason ?? null,
         openIssue: issue?.issueNumber ?? null,
         severity: issue?.severity ?? null,
@@ -604,7 +610,7 @@ const missingDamaged: ReportDefinition = {
       ],
       rows,
       total,
-      page: params.page,
+      page,
       pageSize: params.pageSize,
       pageCount,
       summary: total === 0 ? 'Nothing is recorded missing or damaged.' : `${plural(total, 'item')} out of service.`,
@@ -633,7 +639,7 @@ const issueReport: ReportDefinition = {
     const where: Prisma.IssueWhereInput = clauses.length > 0 ? { AND: clauses } : {}
 
     const total = await db.issue.count({ where })
-    const { skip, take, pageCount } = paginate(params.page, params.pageSize, total)
+    const { skip, take, pageCount, page } = paginate(params.page, params.pageSize, total)
     const issues = await db.issue.findMany({
       where,
       orderBy: [{ reportedAt: 'desc' }],
@@ -693,7 +699,7 @@ const issueReport: ReportDefinition = {
       ],
       rows,
       total,
-      page: params.page,
+      page,
       pageSize: params.pageSize,
       pageCount,
       summary: `${plural(total, 'issue')}${params.status ? ` at ${params.status.toLowerCase().replace(/_/g, ' ')}` : ''}.`,
@@ -727,7 +733,7 @@ const equipmentStatus: ReportDefinition = {
         : {}),
     }
     const total = await db.asset.count({ where })
-    const { skip, take, pageCount } = paginate(params.page, params.pageSize, total)
+    const { skip, take, pageCount, page } = paginate(params.page, params.pageSize, total)
     const assets = await db.asset.findMany({
       where,
       orderBy: [{ assetCode: 'asc' }],
@@ -784,7 +790,7 @@ const equipmentStatus: ReportDefinition = {
       ],
       rows,
       total,
-      page: params.page,
+      page,
       pageSize: params.pageSize,
       pageCount,
       summary: `${plural(total, 'asset')}${params.status ? ` at ${params.status.toLowerCase().replace(/_/g, ' ')}` : ''}.`,
@@ -812,7 +818,7 @@ const maintenanceReport: ReportDefinition = {
     const where: Prisma.MaintenanceRecordWhereInput = { AND: clauses }
 
     const total = await db.maintenanceRecord.count({ where })
-    const { skip, take, pageCount } = paginate(params.page, params.pageSize, total)
+    const { skip, take, pageCount, page } = paginate(params.page, params.pageSize, total)
     const records = await db.maintenanceRecord.findMany({
       where,
       orderBy: [{ createdAt: 'desc' }],
@@ -873,7 +879,7 @@ const maintenanceReport: ReportDefinition = {
       ],
       rows,
       total,
-      page: params.page,
+      page,
       pageSize: params.pageSize,
       pageCount,
       summary: `${plural(total, 'maintenance record')}${params.status ? ` at ${params.status.toLowerCase().replace(/_/g, ' ')}` : ''}.`,

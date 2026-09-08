@@ -4,6 +4,7 @@ import type { AuditAction, Prisma, UserRole } from '@prisma/client'
 
 import { businessDayRange, zonedLocalToDate } from '@/lib/datetime'
 import { AUDIT_GROUP_ACTIONS, type AuditEntityType, type AuditListParams } from '@/lib/validation/audit'
+import { clampPage, pageCountFor } from '@/lib/pagination'
 import type { Db } from '@/server/db/prisma'
 
 /**
@@ -209,16 +210,16 @@ async function resolveReferences(db: Db, records: readonly { entityType: string;
 export async function listAuditLogPage(db: Db, params: AuditListParams, timeZone: string): Promise<AuditLogResult> {
   const where = whereFor(params, timeZone)
 
-  const [total, records] = await Promise.all([
-    db.auditLog.count({ where }),
-    db.auditLog.findMany({
-      where,
-      select: listSelect,
-      orderBy: orderBy(params),
-      skip: (params.page - 1) * params.pageSize,
-      take: params.pageSize,
-    }),
-  ])
+  const total = await db.auditLog.count({ where })
+  const pageCount = pageCountFor(total, params.pageSize)
+  const page = clampPage(params.page, pageCount)
+  const records = await db.auditLog.findMany({
+    where,
+    select: listSelect,
+    orderBy: orderBy(params),
+    skip: (page - 1) * params.pageSize,
+    take: params.pageSize,
+  })
 
   const references = await resolveReferences(db, records)
 
@@ -232,9 +233,9 @@ export async function listAuditLogPage(db: Db, params: AuditListParams, timeZone
       }
     }),
     total,
-    page: params.page,
+    page,
     pageSize: params.pageSize,
-    pageCount: Math.max(1, Math.ceil(total / params.pageSize)),
+    pageCount,
   }
 }
 

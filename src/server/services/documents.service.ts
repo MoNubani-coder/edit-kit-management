@@ -31,7 +31,8 @@ async function bookingScope(db: Db, bookingId: string) {
   return db.booking.findFirst({ where: { id: bookingId, deletedAt: null }, select: { id: true, editorId: true } })
 }
 
-function mayRead(actor: Actor, editorId: string): boolean {
+/** A booking with no directory profile is nobody's own: fail closed for `booking.readOwn`. */
+function mayRead(actor: Actor, editorId: string | null): boolean {
   if (can(actor, 'booking.read')) return true
   if (can(actor, 'booking.readOwn')) return actor.editorProfileId !== null && actor.editorProfileId === editorId
   return false

@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { formatDate, formatTime } from '@/lib/datetime'
 import type { BookingListParams, BookingSortKey } from '@/lib/validation/bookings'
 import { cn } from '@/lib/utils/cn'
+import { requesterOf } from '@/lib/booking-requester'
 import type { BookingListPage } from '@/server/services/bookings.service'
 
 import { bookingsHref } from '../hrefs'
@@ -67,7 +68,7 @@ export function BookingsTable({
             filtered
               ? 'Try another tab or search term.'
               : canCreate
-                ? 'Create the first booking: choose the editor, the kit and the dates, then reserve.'
+                ? 'Create the first booking: choose the kit, say who it is for and when, then reserve.'
                 : 'Bookings will appear here once a kit has been reserved.'
           }
           action={filtered ? { href: '/bookings', label: 'Clear filters' } : canCreate ? { href: '/bookings/new', label: 'New booking' } : undefined}
@@ -78,7 +79,7 @@ export function BookingsTable({
             <thead>
               <tr>
                 <SortHeader label="Booking" sortKey="bookingNumber" params={params} />
-                <th scope="col" className={TH}>Editor</th>
+                <th scope="col" className={TH}>Requester</th>
                 <th scope="col" className={TH}>Kit</th>
                 <SortHeader label="Start" sortKey="bookingStart" params={params} />
                 <th scope="col" className={cn(TH, 'hidden xl:table-cell')}>End</th>
@@ -86,11 +87,13 @@ export function BookingsTable({
                 <SortHeader label="Expected return" sortKey="expectedReturnDate" params={params} />
                 <th scope="col" className={cn(TH, 'hidden xl:table-cell')}>Returned</th>
                 <SortHeader label="Status" sortKey="status" params={params} />
-                <th scope="col" className={cn(TH, 'hidden lg:table-cell')}>Engineer</th>
+                <th scope="col" className={cn(TH, 'hidden lg:table-cell')}>Prepared by</th>
               </tr>
             </thead>
             <tbody>
-              {result.rows.map((row) => (
+              {result.rows.map((row) => {
+                const requester = requesterOf(row)
+                return (
                 <tr key={row.id} className={cn('border-t border-line transition-colors hover:bg-panel-header', row.overdue && 'bg-rose-50/40 dark:bg-rose-400/5')}>
                   <td className={TD}>
                     <Link href={`/bookings/${row.id}`} className="font-mono text-xs font-semibold text-accent-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded">
@@ -98,10 +101,11 @@ export function BookingsTable({
                     </Link>
                   </td>
                   <td className={`${TD} max-w-[16rem]`}>
-                    <p className="truncate font-medium text-foreground">{row.editor.fullName}</p>
+                    <p className="truncate font-medium text-foreground">{requester.name}</p>
                     <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted">
-                      <Badge tone={row.editor.isExternal ? 'neutral' : 'blue'}>{row.editor.isExternal ? 'External' : 'Internal'}</Badge>
-                      {row.editor.staffId ? <span className="font-mono">{row.editor.staffId}</span> : null}
+                      {requester.isExternal !== null ? <Badge tone={requester.isExternal ? 'neutral' : 'blue'}>{requester.isExternal ? 'External' : 'Internal'}</Badge> : null}
+                      {requester.staffId ? <span className="font-mono">{requester.staffId}</span> : null}
+                      {requester.projectName ? <span className="truncate">{requester.projectName}</span> : null}
                     </p>
                   </td>
                   <td className={`${TD} max-w-[16rem]`}>
@@ -129,9 +133,10 @@ export function BookingsTable({
                   <td className={TD}>
                     <BookingStatusBadge status={row.status} />
                   </td>
-                  <td className={`${TD} hidden text-foreground lg:table-cell`}>{row.engineer.fullName}</td>
+                  <td className={`${TD} hidden text-foreground lg:table-cell`}>{row.createdBy.name}</td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         </div>

@@ -392,6 +392,7 @@ export async function getAssetDetail(db: Db, id: string, options: AssetDetailOpt
             status: true,
             bookingStart: true,
             expectedReturnDate: true,
+            requesterName: true,
             editor: { select: { fullName: true } },
           },
         })
@@ -424,7 +425,7 @@ export async function getAssetDetail(db: Db, id: string, options: AssetDetailOpt
           status: activeBooking.status,
           bookingStart: activeBooking.bookingStart,
           expectedReturnDate: activeBooking.expectedReturnDate,
-          editorName: activeBooking.editor.fullName,
+          editorName: activeBooking.requesterName ?? activeBooking.editor?.fullName ?? 'Unnamed requester',
         }
       : null,
     accessories: asset.accessories,

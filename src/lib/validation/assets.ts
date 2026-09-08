@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { pageSizeSchema } from '@/lib/pagination'
+
 /**
  * Equipment (asset), accessory and category schemas. Shared by the client
  * forms (for immediate feedback) and the server actions (the check that
@@ -140,7 +142,7 @@ const listParamsSchema = z.object({
   sort: z.enum(ASSET_SORT_KEYS).catch('assetCode'),
   dir: z.enum(['asc', 'desc']).catch('asc'),
   page: z.coerce.number().int().min(1).catch(1),
-  pageSize: z.coerce.number().int().min(5).max(100).catch(DEFAULT_PAGE_SIZE),
+  pageSize: pageSizeSchema(DEFAULT_PAGE_SIZE),
 })
 
 export type AssetListParams = z.output<typeof listParamsSchema>

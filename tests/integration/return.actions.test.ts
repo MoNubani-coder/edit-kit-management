@@ -7,7 +7,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Actor } from '@/server/auth/session'
 import type { Db } from '@/server/db/prisma'
 
-import { actorFor, createTestUser, testDb, type TestUser } from '../helpers/db'
+import { actorFor, createTestUser, testDb, type TestUser, } from '../helpers/db'
+import { prepareChecklistFor } from '../helpers/checklist'
 
 /**
  * The return Server Actions and their authorization, exercised through the
@@ -164,6 +165,7 @@ async function checkedOutBooking(): Promise<{ id: string; number: string; kitId:
     notes: undefined,
     intent: 'reserve',
   })
+  await prepareChecklistFor(tx, adminActor, booking.id)
   await markReadyForHandover(tx, adminActor, booking.id)
   await startHandover(tx, engineerActor, booking.id)
   const handover = (await getLiveHandover(tx, booking.id))!
@@ -259,7 +261,7 @@ describe('authorization', () => {
         await run(saveReturnEquipmentFormAction, { bookingId: booking.id, suitcaseStatus: 'GOOD', [`asset.${line.id}.status`]: 'INCLUDED' }),
       ).toMatchObject({ result: { ok: false, error: 'forbidden' } })
       expect(await run(captureReturnSignatureFormAction, { bookingId: booking.id, role: 'ENGINEER', image: PNG })).toMatchObject({ result: { ok: false, error: 'forbidden' } })
-      expect(await run(completeReturnFormAction, { bookingId: booking.id, confirm: 'true' })).toMatchObject({ result: { ok: false, error: 'forbidden' } })
+      expect(await run(completeReturnFormAction, { bookingId: booking.id, confirm: 'true', returnedByName: 'Runner from the edit suite' })).toMatchObject({ result: { ok: false, error: 'forbidden' } })
     }
 
     // Nothing was recorded by either of them.
@@ -364,21 +366,25 @@ describe('completing through the form', () => {
     expect(await run(completeReturnFormAction, { bookingId: booking.id })).toMatchObject({ result: { ok: false, error: 'validation' } })
 
     currentSession = sessionFor(admin)
-    expect(await run(completeReturnFormAction, { bookingId: booking.id, confirm: 'true' })).toMatchObject({ ok: true })
+    expect(await run(completeReturnFormAction, { bookingId: booking.id, confirm: 'true', returnedByName: 'Runner from the edit suite' })).toMatchObject({ ok: true })
 
     const completed = await tx.booking.findUniqueOrThrow({ where: { id: booking.id }, select: { status: true, actualReturnDate: true } })
     expect(completed.status).toBe('COMPLETED')
     expect(completed.actualReturnDate).not.toBeNull()
+    // Who brought it back is typed in; who received it is whoever completed, never typed.
+    const returnInspection = await tx.inspection.findFirstOrThrow({ where: { bookingId: booking.id, type: 'RETURN' }, select: { returnedByName: true, completedById: true } })
+    expect(returnInspection.returnedByName).toBe('Runner from the edit suite')
+    expect(returnInspection.completedById).toBe(admin.id)
 
     // A second submit - a double click, a refresh, another tab - changes nothing.
-    const again = await run(completeReturnFormAction, { bookingId: booking.id, confirm: 'true' })
+    const again = await run(completeReturnFormAction, { bookingId: booking.id, confirm: 'true', returnedByName: 'Runner from the edit suite' })
     expect(again).toMatchObject({ result: { ok: false, error: 'rejected' } })
     expect(await tx.inspection.count({ where: { bookingId: booking.id, type: 'RETURN' } })).toBe(1)
     expect(await tx.inspection.count({ where: { bookingId: booking.id, type: 'RETURN', status: 'COMPLETED' } })).toBe(1)
 
     // And a VIEWER still cannot complete what is already done.
     currentSession = sessionFor(viewer)
-    expect(await run(completeReturnFormAction, { bookingId: booking.id, confirm: 'true' })).toMatchObject({ result: { ok: false, error: 'forbidden' } })
+    expect(await run(completeReturnFormAction, { bookingId: booking.id, confirm: 'true', returnedByName: 'Runner from the edit suite' })).toMatchObject({ result: { ok: false, error: 'forbidden' } })
   })
 
   it('refuses to complete when something handed over has no answer', async () => {
@@ -387,7 +393,7 @@ describe('completing through the form', () => {
     await run(startReturnFormAction, { bookingId: booking.id })
     await run(captureReturnSignatureFormAction, { bookingId: booking.id, role: 'ENGINEER', image: PNG })
 
-    const result = await run(completeReturnFormAction, { bookingId: booking.id, confirm: 'true' })
+    const result = await run(completeReturnFormAction, { bookingId: booking.id, confirm: 'true', returnedByName: 'Runner from the edit suite' })
     expect(result).toMatchObject({ result: { ok: false, error: 'rejected' } })
     expect((await tx.booking.findUniqueOrThrow({ where: { id: booking.id }, select: { status: true } })).status).toBe('RETURN_INSPECTION')
     expect(await tx.issue.count({ where: { bookingId: booking.id } })).toBe(0)

@@ -37,8 +37,10 @@ export interface BookingSummary {
   bookingEnd: Date
   expectedReturnDate: Date
   kit: { id: string; kitCode: string; name: string }
-  editor: { id: string; fullName: string }
-  engineer: { id: string; fullName: string }
+  /** Legacy directory profile; null on bookings that carry their own requester. */
+  editor: { id: string; fullName: string } | null
+  engineer: { id: string; fullName: string } | null
+  requesterName: string | null
 }
 
 const summarySelect = {
@@ -48,6 +50,7 @@ const summarySelect = {
   bookingStart: true,
   bookingEnd: true,
   expectedReturnDate: true,
+  requesterName: true,
   kit: { select: { id: true, kitCode: true, name: true } },
   editor: { select: { id: true, fullName: true } },
   engineer: { select: { id: true, fullName: true } },
@@ -175,6 +178,11 @@ function searchWhere(search: string): Prisma.BookingWhereInput | null {
       { kit: { admBarcode: contains } },
       { editor: { fullName: contains } },
       { editor: { staffId: contains } },
+      { requesterName: contains },
+      { requesterStaffId: contains },
+      { requesterMobile: contains },
+      { projectName: contains },
+      { workOrder: contains },
     ],
   }
 }
@@ -238,9 +246,16 @@ export interface BookingListRow {
   expectedReturnDate: Date
   actualReturnDate: Date | null
   createdAt: Date
-  editor: { id: string; fullName: string; staffId: string | null; isExternal: boolean }
+  requesterName: string | null
+  requesterStaffId: string | null
+  requesterMobile: string | null
+  projectName: string | null
+  workOrder: string | null
+  /** Legacy directory profile; null on bookings that carry their own requester. */
+  editor: { id: string; fullName: string; staffId: string | null; isExternal: boolean; contactNumber: string | null } | null
   kit: { id: string; kitCode: string; name: string }
-  engineer: { id: string; fullName: string }
+  engineer: { id: string; fullName: string } | null
+  createdBy: { id: string; name: string }
 }
 
 export interface BookingListResult {
@@ -261,9 +276,15 @@ const rowSelect = {
   expectedReturnDate: true,
   actualReturnDate: true,
   createdAt: true,
-  editor: { select: { id: true, fullName: true, staffId: true, isExternal: true } },
+  requesterName: true,
+  requesterStaffId: true,
+  requesterMobile: true,
+  projectName: true,
+  workOrder: true,
+  editor: { select: { id: true, fullName: true, staffId: true, isExternal: true, contactNumber: true } },
   kit: { select: { id: true, kitCode: true, name: true } },
   engineer: { select: { id: true, fullName: true } },
+  createdBy: { select: { id: true, name: true } },
 } satisfies Prisma.BookingSelect
 
 function orderBy(sort: BookingSortKey, direction: 'asc' | 'desc'): Prisma.BookingOrderByWithRelationInput[] {
@@ -344,10 +365,21 @@ export interface BookingDetail {
   cancelReason: string | null
   createdAt: Date
   updatedAt: Date
-  editor: { id: string; fullName: string; staffId: string | null; isExternal: boolean; isActive: boolean; contactNumber: string | null; company: string | null; department: string | null }
+  requesterName: string | null
+  requesterStaffId: string | null
+  requesterMobile: string | null
+  projectName: string | null
+  workOrder: string | null
+  /** Legacy directory profile; null on bookings that carry their own requester. */
+  editor: { id: string; fullName: string; staffId: string | null; isExternal: boolean; isActive: boolean; contactNumber: string | null; company: string | null; department: string | null } | null
   kit: { id: string; kitCode: string; name: string; status: string; admBarcode: string | null }
-  engineer: { id: string; fullName: string; staffId: string | null }
+  engineer: { id: string; fullName: string; staffId: string | null } | null
+  /** Who prepared the booking: the authenticated user who created it. */
+  createdBy: { id: string; name: string }
   checklistTemplate: { id: string; name: string } | null
+  /** When the pre-handover checklist was finished, and by whom. */
+  checklistPreparedAt: Date | null
+  checklistPreparedBy: { name: string } | null
 }
 
 const detailSelect = {
@@ -365,10 +397,18 @@ const detailSelect = {
   cancelReason: true,
   createdAt: true,
   updatedAt: true,
+  requesterName: true,
+  requesterStaffId: true,
+  requesterMobile: true,
+  projectName: true,
+  workOrder: true,
   editor: { select: { id: true, fullName: true, staffId: true, isExternal: true, isActive: true, contactNumber: true, company: true, department: true } },
   kit: { select: { id: true, kitCode: true, name: true, status: true, admBarcode: true } },
   engineer: { select: { id: true, fullName: true, staffId: true } },
+  createdBy: { select: { id: true, name: true } },
   checklistTemplate: { select: { id: true, name: true } },
+  checklistPreparedAt: true,
+  checklistPreparedBy: { select: { name: true } },
 } satisfies Prisma.BookingSelect
 
 export async function getBookingDetailForActor(db: Db, actor: Actor, bookingId: string): Promise<BookingDetail | null> {
@@ -412,9 +452,9 @@ export async function findOverlappingBookings(
     },
     orderBy: [{ bookingStart: 'asc' }],
     take: 5,
-    select: { id: true, bookingNumber: true, status: true, bookingStart: true, bookingEnd: true, editor: { select: { fullName: true } } },
+    select: { id: true, bookingNumber: true, status: true, bookingStart: true, bookingEnd: true, requesterName: true, editor: { select: { fullName: true } } },
   })
-  return rows.map(({ editor, ...row }) => ({ ...row, editorName: editor.fullName }))
+  return rows.map(({ editor, requesterName, ...row }) => ({ ...row, editorName: requesterName ?? editor?.fullName ?? 'an unnamed requester' }))
 }
 
 // -----------------------------------------------------------------------------
@@ -429,8 +469,13 @@ export interface BookingLifecycleContext {
   kitId: string
   kitCode: string
   kitStatus: string
-  editorId: string
-  engineerId: string
+  editorId: string | null
+  engineerId: string | null
+  requesterName: string | null
+  requesterStaffId: string | null
+  requesterMobile: string | null
+  projectName: string | null
+  workOrder: string | null
   bookingStart: Date
   bookingEnd: Date
   collectionDate: Date | null
@@ -450,6 +495,11 @@ export async function getBookingLifecycleContext(db: Db, id: string): Promise<Bo
       kitId: true,
       editorId: true,
       engineerId: true,
+      requesterName: true,
+      requesterStaffId: true,
+      requesterMobile: true,
+      projectName: true,
+      workOrder: true,
       bookingStart: true,
       bookingEnd: true,
       collectionDate: true,
@@ -470,6 +520,11 @@ export async function getBookingLifecycleContext(db: Db, id: string): Promise<Bo
     kitStatus: booking.kit.status,
     editorId: booking.editorId,
     engineerId: booking.engineerId,
+    requesterName: booking.requesterName,
+    requesterStaffId: booking.requesterStaffId,
+    requesterMobile: booking.requesterMobile,
+    projectName: booking.projectName,
+    workOrder: booking.workOrder,
     bookingStart: booking.bookingStart,
     bookingEnd: booking.bookingEnd,
     collectionDate: booking.collectionDate,
@@ -570,7 +625,9 @@ export async function getBookingActivity(db: Db, bookingId: string, limit = 100)
     select: { id: true, action: true, summary: true, actorName: true, createdAt: true, metadata: true },
   })
   return audits.map((audit) => {
-    const detail = audit.metadata && typeof audit.metadata === 'object' && 'detail' in audit.metadata ? String((audit.metadata as { detail?: unknown }).detail ?? '') : ''
+    const meta = audit.metadata && typeof audit.metadata === 'object' ? (audit.metadata as { detail?: unknown; reason?: unknown }) : {}
+    // A reason (mandatory on every edit) is the detail people want to read.
+    const detail = meta.reason ? `Reason: ${String(meta.reason)}` : meta.detail ? String(meta.detail) : ''
     return {
       id: `audit:${audit.id}`,
       at: audit.createdAt,

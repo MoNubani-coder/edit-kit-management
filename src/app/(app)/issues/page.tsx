@@ -10,7 +10,7 @@ import { issuesHref } from '@/features/issues/hrefs'
 import { IssuesTable } from '@/features/issues/components/issues-table'
 import { env } from '@/lib/env'
 import { cn } from '@/lib/utils/cn'
-import { ISSUE_FILTER_LABELS, ISSUE_FILTERS, parseIssueListParams } from '@/lib/validation/issues'
+import { ISSUE_DEFAULT_PAGE_SIZE, ISSUE_FILTER_LABELS, ISSUE_FILTERS, parseIssueListParams } from '@/lib/validation/issues'
 import { requirePermissionForPage } from '@/server/auth/page-guards'
 import { loadIssueList } from '@/server/services/issues.service'
 
@@ -64,6 +64,7 @@ export default async function IssuesPage({ searchParams }: { searchParams: Promi
           {params.filter !== 'open' ? <input type="hidden" name="filter" value={params.filter} /> : null}
           {params.sort !== 'reportedAt' ? <input type="hidden" name="sort" value={params.sort} /> : null}
           {params.dir !== 'desc' ? <input type="hidden" name="dir" value={params.dir} /> : null}
+          {params.pageSize !== ISSUE_DEFAULT_PAGE_SIZE ? <input type="hidden" name="pageSize" value={params.pageSize} /> : null}
           <div className="relative">
             <Search aria-hidden className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-subtle" />
             <Input

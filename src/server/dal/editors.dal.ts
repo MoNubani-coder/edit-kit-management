@@ -500,7 +500,7 @@ export async function listEditorBookings(
       expectedReturnDate: record.expectedReturnDate,
       actualReturnDate: record.actualReturnDate,
       kit: record.kit,
-      engineerName: record.engineer.fullName,
+      engineerName: record.engineer?.fullName ?? 'Unassigned',
     })),
     total,
     page,

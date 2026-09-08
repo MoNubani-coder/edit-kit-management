@@ -6,7 +6,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 
 import type { Db } from '@/server/db/prisma'
 
-import { actorFor, createTestUser, testDb, type TestUser } from '../helpers/db'
+import { actorFor, createTestUser, testDb, type TestUser, } from '../helpers/db'
+import { prepareChecklistFor } from '../helpers/checklist'
 
 /**
  * The handover Server Actions invoked directly, as a hostile client could POST
@@ -117,6 +118,7 @@ beforeAll(async () => {
     intent: 'reserve',
   })
   bookingId = booking.id
+  await prepareChecklistFor(tx, actor, bookingId)
   await markReadyForHandover(tx, actor, bookingId)
 })
 

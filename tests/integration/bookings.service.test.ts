@@ -32,6 +32,7 @@ import { DomainError } from '@/server/services/errors'
 import { addKitAsset, createKit } from '@/server/services/kits.service'
 
 import { actorFor, createTestUser, testDb, type TestUser, withRollback } from '../helpers/db'
+import { prepareChecklistFor } from '../helpers/checklist'
 
 /**
  * Booking rules against the real database, inside rolled-back transactions.
@@ -223,7 +224,9 @@ describe('creating bookings', () => {
       expect(booking.status).toBe('RESERVED')
       const row = await tx.booking.findUniqueOrThrow({ where: { id: booking.id } })
       expect(row.collectionDate?.toISOString()).toBe('2040-03-10T04:00:00.000Z')
-      expect(row.checklistTemplateId).toBeNull()
+      // The checklist is copied onto the booking at creation, so it can be prepared before the handover.
+      expect(row.checklistTemplateId).not.toBeNull()
+      expect(await tx.bookingChecklistItem.count({ where: { bookingId: booking.id } })).toBeGreaterThan(0)
       expect((await tx.kit.findUniqueOrThrow({ where: { id: kit.id } })).status).toBe('AVAILABLE')
 
       const actions = (await tx.auditLog.findMany({ where: { entityType: 'Booking', entityId: booking.id }, orderBy: { createdAt: 'asc' } })).map((row) => row.action)
@@ -493,7 +496,8 @@ describe('editing, transitions and cancellation', () => {
       const kit = await readyKit(tx, fx)
       const a = await createBooking(tx, fx.actor, input(fx, editor.id, kit.id))
       const b = await createBooking(tx, fx.actor, input(fx, editor.id, kit.id, { bookingStart: local(15, 9), bookingEnd: local(16, 18) }))
-      const base = { editorId: editor.id, kitId: kit.id, engineerId: fx.engineerId, bookingStart: local(15, 9), bookingEnd: local(16, 18), collectionDate: undefined, expectedReturnDate: undefined, purpose: undefined, notes: undefined }
+      // Every edit carries its reason; the audit trail shows it.
+      const base = { editorId: editor.id, kitId: kit.id, engineerId: fx.engineerId, bookingStart: local(15, 9), bookingEnd: local(16, 18), collectionDate: undefined, expectedReturnDate: undefined, purpose: undefined, notes: undefined, reason: 'Schedule moved by the client' }
 
       // Moving B onto A's window is refused; moving it elsewhere is fine and audited.
       await expect(updateBooking(tx, fx.actor, b.id, { ...base, bookingStart: local(11, 9), bookingEnd: local(13, 9) })).rejects.toMatchObject({ code: 'conflict', message: expect.stringContaining(a.bookingNumber) })
@@ -509,6 +513,7 @@ describe('editing, transitions and cancellation', () => {
       await expect(updateBooking(tx, fx.actor, b.id, { ...base, kitId: damaged.id, bookingStart: local(20, 9), bookingEnd: local(22, 18), purpose: 'Moved' })).rejects.toMatchObject({ code: 'lifecycle', message: expect.stringContaining(damaged.assetCode) })
 
       // Ready for handover: engineer and notes only.
+      await prepareChecklistFor(tx, fx.actor, a.id)
       await markReadyForHandover(tx, fx.actor, a.id)
       const aBase = { ...base, bookingStart: local(10, 9), bookingEnd: local(12, 18) }
       await expect(updateBooking(tx, fx.actor, a.id, { ...aBase, bookingEnd: local(12, 20) })).rejects.toMatchObject({ code: 'lifecycle', fieldErrors: { bookingEnd: expect.stringContaining('ready for handover') } })
@@ -539,6 +544,7 @@ describe('editing, transitions and cancellation', () => {
       expect(await status()).toBe('DRAFT')
       await reserveBooking(tx, fx.actor, booking.id)
 
+      await prepareChecklistFor(tx, fx.actor, booking.id)
       await markReadyForHandover(tx, fx.actor, booking.id)
       expect(await status()).toBe('READY_FOR_HANDOVER')
       expect(await kitStatus()).toBe('RESERVED')
@@ -548,6 +554,7 @@ describe('editing, transitions and cancellation', () => {
       expect(await status()).toBe('RESERVED')
       expect(await kitStatus()).toBe('AVAILABLE')
 
+      await prepareChecklistFor(tx, fx.actor, booking.id)
       await markReadyForHandover(tx, fx.actor, booking.id)
       await expect(cancelBooking(tx, fx.actor, booking.id, { reason: 'Shoot cancelled' })).resolves.toBeUndefined()
       const row = await tx.booking.findUniqueOrThrow({ where: { id: booking.id } })

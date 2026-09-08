@@ -70,7 +70,7 @@ describe('booking visibility', () => {
   it('an EDITOR can read their own booking', async () => {
     const booking = await getBookingForActor(testDb, actorFor(editorA), bookingA)
     expect(booking?.id).toBe(bookingA)
-    expect(booking?.editor.id).toBe(editorA.editorProfileId)
+    expect(booking?.editor?.id).toBe(editorA.editorProfileId)
   })
 
   it("an EDITOR cannot read another editor's booking - it is simply not found", async () => {

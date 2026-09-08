@@ -16,7 +16,6 @@ import { KitHistory } from '@/features/kits/components/kit-history'
 import { KitOperationsPanel } from '@/features/kits/components/kit-operations-panel'
 import { KitOverview } from '@/features/kits/components/kit-overview'
 import { KitQrPanel } from '@/features/kits/components/kit-qr-panel'
-import { SoftwarePanel } from '@/features/kits/components/software-panel'
 import { kitHref } from '@/features/kits/hrefs'
 import { formatDateTime } from '@/lib/datetime'
 import { env } from '@/lib/env'
@@ -28,7 +27,6 @@ import {
   loadAssetCandidates,
   loadChecklistPreview,
   loadKitChecklistOptions,
-  loadKitSoftwareOptions,
   loadKitWorkspace,
 } from '@/server/services/kits.service'
 import { kitQrCode } from '@/server/services/qr.service'
@@ -44,7 +42,7 @@ function first(value: string | string[] | undefined): string | undefined {
 
 /**
  * The kit workspace: header with identity and readiness, then Overview,
- * Equipment, Software, Checklist and History tabs driven by `?tab=`. Form
+ * Equipment, Checklist and History tabs driven by `?tab=`. Form
  * state (which member is being edited, whether the picker is open and what it
  * searched for) also lives in the URL.
  */
@@ -75,8 +73,8 @@ export default async function KitDetailPage({
   const pickerOpen = tab === 'equipment' && manageable && !membersBlocker && (first(query.add) === '1' || pickTerm.length > 0)
   const candidates = pickerOpen && pickTerm ? await loadAssetCandidates(prisma, id, pickTerm) : []
 
-  // Software and checklist tab options
-  const softwareOptions = tab === 'software' && manageable ? await loadKitSoftwareOptions(prisma) : []
+  // Checklist tab options. Software is no longer an operational tab: verification
+  // does not gate a handover, so the list stays on the record but is not shown.
   const templates = tab === 'checklist' ? await loadKitChecklistOptions(prisma) : []
   const fallbackTemplate = templates.find((template) => template.isDefault) ?? null
   const effectiveTemplateId = kit.checklistTemplate?.id ?? fallbackTemplate?.id ?? null
@@ -84,7 +82,6 @@ export default async function KitDetailPage({
 
   const counts: Partial<Record<(typeof KIT_TABS)[number], number>> = {
     equipment: kit.members.length,
-    software: kit.software.length,
     checklist: kit.checklistTemplate?.itemCount,
     history: history.length,
   }
@@ -164,7 +161,6 @@ export default async function KitDetailPage({
             picker={pickerOpen ? { open: true, term: pickTerm, candidates } : null}
           />
         ) : null}
-        {tab === 'software' ? <SoftwarePanel kitId={kit.id} software={kit.software} options={softwareOptions} canManage={manageable} /> : null}
         {tab === 'checklist' ? (
           <ChecklistPanel kitId={kit.id} template={kit.checklistTemplate} fallback={fallbackTemplate} items={checklistItems} options={templates} canManage={manageable} />
         ) : null}

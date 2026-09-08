@@ -35,7 +35,7 @@ function RequiredSelect({ id, defaultValue }: { id: string; defaultValue: boolea
 }
 
 /** One candidate row's "Add" control: slot label, required / optional, submit. */
-export function AddMemberForm({ kitId, assetId, assetCode }: { kitId: string; assetId: string; assetCode: string }) {
+export function AddMemberForm({ kitId, assetId, assetCode, pick }: { kitId: string; assetId: string; assetCode: string; pick?: string }) {
   const [state, formAction, pending] = useActionState<KitCompositionState, FormData>(addKitAssetFormAction, null)
   const id = useId()
 
@@ -43,6 +43,7 @@ export function AddMemberForm({ kitId, assetId, assetCode }: { kitId: string; as
     <form action={formAction} className="flex flex-wrap items-end justify-end gap-2">
       <input type="hidden" name="kitId" value={kitId} />
       <input type="hidden" name="assetId" value={assetId} />
+      {pick ? <input type="hidden" name="pick" value={pick} /> : null}
       <label className="sr-only" htmlFor={`${id}-slot`}>
         Slot label for {assetCode}
       </label>

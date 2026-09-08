@@ -2,6 +2,7 @@ import 'server-only'
 
 import type { Prisma } from '@prisma/client'
 
+import { clampPage, pageCountFor } from '@/lib/pagination'
 import type { Db } from '@/server/db/prisma'
 
 /** Reference data behind the equipment forms and the Categories admin page. */
@@ -56,6 +57,30 @@ export async function listCategories(
     orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
   })
   return records.map(toCategoryRow)
+}
+
+export interface CategoryPage {
+  rows: CategoryRow[]
+  total: number
+  page: number
+  pageSize: number
+  pageCount: number
+}
+
+/** The Categories admin table: one page at a time, like every other list. */
+export async function listCategoriesPage(db: Db, params: { page: number; pageSize: number; includeInactive?: boolean }): Promise<CategoryPage> {
+  const where: Prisma.EquipmentCategoryWhereInput = { deletedAt: null, ...(params.includeInactive ? {} : { isActive: true }) }
+  const total = await db.equipmentCategory.count({ where })
+  const pageCount = pageCountFor(total, params.pageSize)
+  const page = clampPage(params.page, pageCount)
+  const records = await db.equipmentCategory.findMany({
+    where,
+    select: categorySelect,
+    orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    skip: (page - 1) * params.pageSize,
+    take: params.pageSize,
+  })
+  return { rows: records.map(toCategoryRow), total, page, pageSize: params.pageSize, pageCount }
 }
 
 export async function getCategory(db: Db, id: string): Promise<CategoryRow | null> {

@@ -43,6 +43,13 @@ export interface HandoverBooking {
   purpose: string | null
   notes: string | null
   checklistTemplateId: string | null
+  requesterName: string | null
+  requesterStaffId: string | null
+  requesterMobile: string | null
+  projectName: string | null
+  workOrder: string | null
+  checklistPreparedAt: Date | null
+  /** Legacy directory profile; null on bookings that carry their own requester. */
   editor: {
     id: string
     fullName: string
@@ -54,9 +61,11 @@ export interface HandoverBooking {
     email: string | null
     company: string | null
     department: string | null
-  }
+  } | null
   kit: { id: string; kitCode: string; name: string; status: KitStatus; admBarcode: string | null; suitcaseStatus: SuitcaseStatus; deleted: boolean; defaultChecklistTemplateId: string | null }
-  engineer: { id: string; fullName: string; staffId: string | null; userId: string }
+  engineer: { id: string; fullName: string; staffId: string | null; userId: string } | null
+  /** Who prepared the booking: the authenticated user who created it. */
+  createdBy: { id: string; name: string }
 }
 
 export async function getHandoverBooking(db: Db, bookingId: string): Promise<HandoverBooking | null> {
@@ -74,17 +83,51 @@ export async function getHandoverBooking(db: Db, bookingId: string): Promise<Han
       purpose: true,
       notes: true,
       checklistTemplateId: true,
+      requesterName: true,
+      requesterStaffId: true,
+      requesterMobile: true,
+      projectName: true,
+      workOrder: true,
+      checklistPreparedAt: true,
       editor: {
         select: { id: true, fullName: true, staffId: true, isExternal: true, isActive: true, deletedAt: true, contactNumber: true, email: true, company: true, department: true },
       },
       kit: { select: { id: true, kitCode: true, name: true, status: true, admBarcode: true, suitcaseStatus: true, deletedAt: true, defaultChecklistTemplateId: true } },
       engineer: { select: { id: true, fullName: true, staffId: true, userId: true } },
+      createdBy: { select: { id: true, name: true } },
     },
   })
   if (!booking) return null
-  const { deletedAt: editorDeleted, ...editor } = booking.editor
   const { deletedAt: kitDeleted, ...kit } = booking.kit
-  return { ...booking, editor: { ...editor, deleted: editorDeleted !== null }, kit: { ...kit, deleted: kitDeleted !== null } }
+  const editor = booking.editor ? (({ deletedAt, ...rest }) => ({ ...rest, deleted: deletedAt !== null }))(booking.editor) : null
+  return { ...booking, editor, kit: { ...kit, deleted: kitDeleted !== null } }
+}
+
+// -----------------------------------------------------------------------------
+// The booking's own checklist, prepared before the handover
+// -----------------------------------------------------------------------------
+
+export interface BookingChecklistItemRow {
+  id: string
+  label: string
+  description: string | null
+  phase: ChecklistPhase
+  isRequired: boolean
+  sortOrder: number
+  preparedStatus: ChecklistStatus | null
+  preparedNotes: string | null
+  preparedAt: Date | null
+  preparedByName: string | null
+}
+
+/** Every checklist item copied onto the booking, with the answer given so far. */
+export async function getBookingChecklistItems(db: Db, bookingId: string): Promise<BookingChecklistItemRow[]> {
+  const rows = await db.bookingChecklistItem.findMany({
+    where: { bookingId },
+    orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }],
+    select: { id: true, label: true, description: true, phase: true, isRequired: true, sortOrder: true, preparedStatus: true, preparedNotes: true, preparedAt: true, preparedBy: { select: { name: true } } },
+  })
+  return rows.map(({ preparedBy, ...row }) => ({ ...row, preparedByName: preparedBy?.name ?? null }))
 }
 
 // -----------------------------------------------------------------------------
@@ -264,6 +307,8 @@ export interface HandoverChecklistLine {
   isRequired: boolean
   sortOrder: number
   result: { status: ChecklistStatus; notes: string | null } | null
+  /** The answer given while preparing the booking, before the handover started. */
+  prepared: { status: ChecklistStatus; notes: string | null; at: Date | null; byName: string | null } | null
 }
 
 /** What the page may know about a signature: who, when - never where it is stored. */
@@ -365,7 +410,7 @@ export async function getLiveHandover(db: Db, bookingId: string): Promise<Handov
           checklistItems: {
             where: { phase: { in: HANDOVER_PHASES } },
             orderBy: [{ sortOrder: 'asc' }],
-            select: { id: true, label: true, description: true, phase: true, isRequired: true, sortOrder: true },
+            select: { id: true, label: true, description: true, phase: true, isRequired: true, sortOrder: true, preparedStatus: true, preparedNotes: true, preparedAt: true, preparedBy: { select: { name: true } } },
           },
           kit: { select: { kitSoftware: { select: { softwareApplicationId: true, isRequired: true } } } },
         },
@@ -432,7 +477,11 @@ export async function getLiveHandover(db: Db, bookingId: string): Promise<Handov
       })),
     })),
     software: inspection.softwareChecks.map((check) => ({ ...check, isRequired: requiredSoftware.get(check.softwareApplicationId) ?? true })),
-    checklist: inspection.booking.checklistItems.map((item) => ({ ...item, result: resultByItem.get(item.id) ?? null })),
+    checklist: inspection.booking.checklistItems.map(({ preparedStatus, preparedNotes, preparedAt, preparedBy, ...item }) => ({
+      ...item,
+      result: resultByItem.get(item.id) ?? null,
+      prepared: preparedStatus ? { status: preparedStatus, notes: preparedNotes, at: preparedAt, byName: preparedBy?.name ?? null } : null,
+    })),
     signatures: inspection.signatures,
   }
 }
@@ -482,7 +531,7 @@ export async function getHandoverSummary(db: Db, bookingId: string): Promise<Han
 
 /** Signature rows with their storage details - service use only, never returned to pages. */
 export async function getLiveSignatureInternal(db: Db, inspectionId: string, type: SignatureType) {
-  return db.signature.findFirst({ where: { inspectionId, type, voidedAt: null }, select: { id: true, imagePath: true, imageHash: true, signerName: true, signedAt: true } })
+  return db.signature.findFirst({ where: { inspectionId, type, voidedAt: null }, select: { id: true, imagePath: true, imageHash: true, signerName: true, signerMobile: true, signedAt: true } })
 }
 
 /** Quick existence + status read used before every mutation. */

@@ -22,6 +22,7 @@ import { captureReturnSignature, completeReturn, saveReturnChecklist, saveReturn
 import { memorySignatureStore } from '@/server/storage/signature-store'
 
 import { actorFor, createTestUser, testDb, type TestUser, withRollback } from '../helpers/db'
+import { prepareChecklistFor } from '../helpers/checklist'
 
 /**
  * The report query layer (AD-5), against the real database inside rolled-back
@@ -164,6 +165,7 @@ async function scenario(
   }
   if (options.stage === 'reserved') return result
 
+  await prepareChecklistFor(tx, fx.actor, booking.id)
   await markReadyForHandover(tx, fx.actor, booking.id)
   await startHandover(tx, fx.engineer, booking.id)
   const handover = (await getLiveHandover(tx, booking.id))!
@@ -485,13 +487,13 @@ describe('filters, paging and the CSV renderer', () => {
       // The two pages are different rows, not the same page twice.
       expect(page1.result.rows.map((row) => row.assetCode)).not.toContain(page2.result.rows[0].assetCode)
 
-      // Nonsense paging falls back to the defaults rather than failing, and a
-      // page size below the floor or above the ceiling is not honoured.
+      // Nonsense paging falls back to the default rather than failing, and a size
+      // out of range is clamped to the nearest bound (AD-32).
       const odd = await runReport(tx, fx.engineer, 'equipment-status', query({ search: `Paged asset ${marker}`, pageSize: '9999', page: 'abc' }))
       expect(odd.result.page).toBe(1)
-      expect(odd.result.pageSize).toBe(50)
+      expect(odd.result.pageSize).toBe(200)
       const tiny = await runReport(tx, fx.engineer, 'equipment-status', query({ search: `Paged asset ${marker}`, pageSize: '2' }))
-      expect(tiny.result.pageSize).toBe(50)
+      expect(tiny.result.pageSize).toBe(5)
     })
   })
 

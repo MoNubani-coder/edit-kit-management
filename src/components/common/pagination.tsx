@@ -17,7 +17,9 @@ export function Pagination({
   pageSize: number
   hrefFor: (page: number) => string
 }) {
-  const from = total === 0 ? 0 : (page - 1) * pageSize + 1
+  // An empty result has its own empty state; a footer reading "0–0 of 0" adds nothing.
+  if (total === 0) return null
+  const from = (page - 1) * pageSize + 1
   const to = Math.min(total, page * pageSize)
   const windowStart = Math.max(1, Math.min(page - 2, pageCount - 4))
   const pages = Array.from({ length: Math.min(5, pageCount) }, (_, index) => windowStart + index)

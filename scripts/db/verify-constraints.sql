@@ -572,6 +572,89 @@ END $$;
 
 
 -- -----------------------------------------------------------------------------
+-- Test 11: every booking names somebody (bookings_requester_identified)
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE f fx%ROWTYPE;
+BEGIN
+  SELECT * INTO f FROM fx;
+
+  -- A booking that carries its own requester and no editor profile is accepted.
+  BEGIN
+    INSERT INTO bookings (id, "bookingNumber", "kitId", status, "bookingStart", "bookingEnd",
+                          "expectedReturnDate", "createdById", "requesterName", "requesterMobile",
+                          "projectName", "workOrder", "updatedAt")
+    VALUES ('t11-a', 'BK-TEST-000011', f.kit_id, 'RESERVED',
+            '2031-03-01T08:00:00Z', '2031-03-03T17:00:00Z', '2031-03-03T17:00:00Z', f.admin_id,
+            'Typed Requester', '+971 50 111 2222', 'Constraint project', 'WO-TEST-11', now());
+
+    INSERT INTO results (test, status, detail)
+    VALUES ('11. Booking with a typed requester accepted', 'PASS', 'no editor profile needed');
+  EXCEPTION WHEN others THEN
+    INSERT INTO results (test, status, detail)
+    VALUES ('11. Booking with a typed requester accepted', 'FAIL', SQLERRM);
+  END;
+
+  -- A booking that names nobody is refused.
+  BEGIN
+    INSERT INTO bookings (id, "bookingNumber", "kitId", status, "bookingStart", "bookingEnd",
+                          "expectedReturnDate", "createdById", "updatedAt")
+    VALUES ('t11-b', 'BK-TEST-000012', f.kit_id, 'RESERVED',
+            '2031-04-01T08:00:00Z', '2031-04-03T17:00:00Z', '2031-04-03T17:00:00Z', f.admin_id, now());
+
+    INSERT INTO results (test, status, detail)
+    VALUES ('11b. Booking naming nobody rejected', 'FAIL', 'a booking with no editor and no requester was accepted');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO results (test, status, detail)
+    VALUES ('11b. Booking naming nobody rejected', 'PASS', SQLERRM);
+  END;
+END $$;
+
+
+-- -----------------------------------------------------------------------------
+-- Test 12: the columns the workflow changes added are frozen with the rest
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE f fx%ROWTYPE;
+BEGIN
+  SELECT * INTO f FROM fx;
+
+  INSERT INTO bookings (id, "bookingNumber", "kitId", "editorId", "engineerId", status,
+                        "bookingStart", "bookingEnd", "expectedReturnDate", "createdById", "updatedAt")
+  VALUES ('t12-bk', 'BK-TEST-000013', f.kit_id, f.editor_id, f.engineer_id, 'COMPLETED',
+          '2031-05-01T08:00:00Z', '2031-05-03T17:00:00Z', '2031-05-03T17:00:00Z', f.admin_id, now());
+
+  INSERT INTO inspections (id, "bookingId", type, status, "startedById", "returnedByName",
+                           "completedAt", "completedById", "lockedAt", "updatedAt")
+  VALUES ('t12-ins', 't12-bk', 'RETURN', 'COMPLETED', f.admin_id, 'Runner Rashid',
+          now(), f.admin_id, now(), now());
+
+  BEGIN
+    UPDATE inspections SET "returnedByName" = 'Somebody Else' WHERE id = 't12-ins';
+    INSERT INTO results (test, status, detail)
+    VALUES ('12. returnedByName frozen on a locked inspection', 'FAIL', 'the name of whoever returned the kit was rewritten');
+  EXCEPTION WHEN others THEN
+    INSERT INTO results (test, status, detail)
+    VALUES ('12. returnedByName frozen on a locked inspection', 'PASS', SQLERRM);
+  END;
+
+  INSERT INTO signatures (id, "bookingId", "inspectionId", type, "signerRole", "signerName",
+                          "signerMobile", "imagePath", "imageHash")
+  VALUES ('t12-sig', 't12-bk', 't12-ins', 'RETURN_EDITOR', 'EDITOR', 'Runner Rashid',
+          '+971 52 456 7890', 'constraints/t12.png', repeat('a', 64));
+
+  BEGIN
+    UPDATE signatures SET "signerMobile" = '+971 50 000 0000' WHERE id = 't12-sig';
+    INSERT INTO results (test, status, detail)
+    VALUES ('12b. signerMobile frozen on a signature', 'FAIL', 'the recipient mobile was rewritten after signing');
+  EXCEPTION WHEN others THEN
+    INSERT INTO results (test, status, detail)
+    VALUES ('12b. signerMobile frozen on a signature', 'PASS', SQLERRM);
+  END;
+END $$;
+
+
+-- -----------------------------------------------------------------------------
 -- Report
 -- -----------------------------------------------------------------------------
 \set QUIET off

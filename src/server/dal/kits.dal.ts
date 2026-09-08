@@ -12,7 +12,7 @@ import {
   type SuitcaseStatus,
 } from '@prisma/client'
 
-import type { KitSortKey, KitView } from '@/lib/validation/kits'
+import { ASSET_CANDIDATE_LIMIT, type KitSortKey, type KitView } from '@/lib/validation/kits'
 import { ACTIVE_MAINTENANCE_STATUSES } from '@/server/dal/assets.dal'
 import type { Db } from '@/server/db/prisma'
 
@@ -113,6 +113,7 @@ const liveBookingArgs = {
     bookingEnd: true,
     expectedReturnDate: true,
     collectionDate: true,
+    requesterName: true,
     editor: { select: { fullName: true } },
     engineer: { select: { fullName: true } },
   },
@@ -130,8 +131,8 @@ function toBookingSummary(record: LiveBookingRecord | undefined): KitBookingSumm
     bookingEnd: record.bookingEnd,
     expectedReturnDate: record.expectedReturnDate,
     collectionDate: record.collectionDate,
-    editorName: record.editor.fullName,
-    engineerName: record.engineer.fullName,
+    editorName: record.requesterName ?? record.editor?.fullName ?? 'Unnamed requester',
+    engineerName: record.engineer?.fullName ?? 'Unassigned',
   }
 }
 
@@ -670,7 +671,7 @@ export interface AssetCandidate extends AssetAssignmentFacts {
  * code, barcode, serial, manufacturer, model or name. An exact barcode or
  * asset-code match is placed first so a scan lands on one row.
  */
-export async function searchAssetCandidates(db: Db, term: string, limit = 12): Promise<AssetCandidate[]> {
+export async function searchAssetCandidates(db: Db, term: string, limit = ASSET_CANDIDATE_LIMIT): Promise<AssetCandidate[]> {
   const search = term.trim().slice(0, 100)
   if (!search) return []
   const contains = { contains: search, mode: 'insensitive' as const }
@@ -818,6 +819,7 @@ export async function getKitHistory(db: Db, id: string, options: { includeIssues
         actualReturnDate: true,
         cancelledAt: true,
         cancelReason: true,
+        requesterName: true,
         editor: { select: { fullName: true } },
       },
     }),
@@ -881,7 +883,7 @@ export async function getKitHistory(db: Db, id: string, options: { includeIssues
       id: `booking:${booking.id}`,
       at: booking.createdAt,
       kind: 'booking',
-      title: `Reserved under ${booking.bookingNumber} for ${booking.editor.fullName}`,
+      title: `Reserved under ${booking.bookingNumber} for ${booking.requesterName ?? booking.editor?.fullName ?? 'an unnamed requester'}`,
       detail: booking.status === 'COMPLETED' || booking.status === 'CANCELLED' ? null : humanize(booking.status),
       actorName: null,
       reference,
@@ -892,7 +894,7 @@ export async function getKitHistory(db: Db, id: string, options: { includeIssues
         at: booking.collectionDate,
         kind: 'handover',
         title: `Checked out under ${booking.bookingNumber}`,
-        detail: booking.editor.fullName,
+        detail: booking.requesterName ?? booking.editor?.fullName ?? null,
         actorName: null,
         reference,
       })
@@ -1004,7 +1006,7 @@ export async function searchKitCandidates(db: Db, term: string, now: Date, limit
         where: { deletedAt: null, status: { in: [...LIVE_BOOKING_STATUSES] }, bookingEnd: { gte: now } },
         orderBy: [{ bookingStart: 'asc' }],
         take: 5,
-        select: { id: true, bookingNumber: true, status: true, bookingStart: true, bookingEnd: true, editor: { select: { fullName: true } } },
+        select: { id: true, bookingNumber: true, status: true, bookingStart: true, bookingEnd: true, requesterName: true, editor: { select: { fullName: true } } },
       },
     },
   })
@@ -1031,7 +1033,7 @@ export async function searchKitCandidates(db: Db, term: string, now: Date, limit
       status: booking.status,
       bookingStart: booking.bookingStart,
       bookingEnd: booking.bookingEnd,
-      editorName: booking.editor.fullName,
+      editorName: booking.requesterName ?? booking.editor?.fullName ?? 'Unnamed requester',
     })),
   }))
   const exact = (row: KitCandidate) => row.kitCode.toUpperCase() === upper || row.admBarcode?.toUpperCase() === upper

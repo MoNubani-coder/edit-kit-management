@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { PAGE_SIZE_MAX_DENSE, pageSizeSchema } from '@/lib/pagination'
+
 /**
  * Audit log list parameters, and the words the page uses for what it shows.
  *
@@ -170,7 +172,7 @@ const listParamsSchema = z.object({
   sort: z.enum(AUDIT_SORT_KEYS).catch('createdAt'),
   dir: z.enum(['asc', 'desc']).catch('desc'),
   page: z.coerce.number().int().min(1).catch(1),
-  pageSize: z.coerce.number().int().min(10).max(200).catch(AUDIT_DEFAULT_PAGE_SIZE),
+  pageSize: pageSizeSchema(AUDIT_DEFAULT_PAGE_SIZE, PAGE_SIZE_MAX_DENSE),
 })
 
 export type AuditListParams = z.output<typeof listParamsSchema>
@@ -192,7 +194,9 @@ export function parseAuditListParams(raw: RawParams): AuditListParams {
 
 /** The same parameters back as a URL, so every view is a link. */
 export function auditLogHref(params: AuditListParams, overrides: Partial<AuditListParams> = {}): string {
-  const merged = { ...params, ...overrides }
+  // Changing the question restarts at the first page; only paging keeps the page.
+  const resetPage = Object.keys(overrides).some((key) => key !== 'page')
+  const merged = { ...params, ...overrides, page: resetPage ? 1 : overrides.page ?? params.page }
   const search = new URLSearchParams()
   if (merged.q) search.set('q', merged.q)
   if (merged.group !== 'all') search.set('group', merged.group)

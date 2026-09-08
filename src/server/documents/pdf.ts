@@ -234,8 +234,11 @@ export async function renderDocumentPdf(document: FrozenDocument, options: PdfOp
     ['Editor', t(editorLine)],
     ['Mobile', t(document.editor.contactNumber ?? '—')],
     ['Staff ID', t(document.editor.staffId ?? '—')],
-    [document.editor.type === 'EXTERNAL' ? 'Company' : 'Department', t(document.editor.company ?? document.editor.department ?? '—')],
-    ['Assigned engineer', t(document.engineer.assigned ?? '—')],
+    ...(document.editor.type ? [[document.editor.type === 'EXTERNAL' ? 'Company' : 'Department', t(document.editor.company ?? document.editor.department ?? '—')] as [string, string]] : []),
+    ...(document.editor.projectName ? [['Project', t(document.editor.projectName)] as [string, string]] : []),
+    ...(document.editor.workOrder ? [['Work order', t(document.editor.workOrder)] as [string, string]] : []),
+    ...(document.engineer.preparedBy ? [['Prepared by', t(document.engineer.preparedBy)] as [string, string]] : []),
+    ...(document.engineer.assigned ? [['Assigned engineer', t(document.engineer.assigned)] as [string, string]] : []),
     [document.kind === 'handover' ? 'Handed over by' : 'Return received by', t((document.kind === 'handover' ? document.engineer.handedOverBy : document.engineer.returnReceivedBy) ?? '—')],
     ['Collected', t(when(document.collectedAt, options.timeZone))],
     ['Expected return', t(when(document.expectedReturnDate, options.timeZone))],
@@ -245,6 +248,7 @@ export async function renderDocumentPdf(document: FrozenDocument, options: PdfOp
     const late = document.punctuality === 'late'
     pairs(sheet, [
       ['Actual return', t(when(document.returnedAt, options.timeZone))],
+      ...(document.returnedBy ? [['Returned by', t(document.returnedBy)] as [string, string]] : []),
       ['Punctuality', t(document.punctuality ? (late ? `Late by ${document.minutesLate ?? 0} minutes` : document.punctuality.replace('-', ' ')) : '—')],
     ])
     if (document.measuredAgainst) {
@@ -399,7 +403,7 @@ export async function renderDocumentPdf(document: FrozenDocument, options: PdfOp
       page.drawText('(signature on file)', { x: x + 12, y: top - 46, size: 7.5, font: regular, color: MUTED })
     }
     page.drawLine({ start: { x: x + 12, y: top - 68 }, end: { x: x + boxWidth - 12, y: top - 68 }, thickness: 0.6, color: RULE })
-    page.drawText(Sheet.safe(signature.signerName ?? '—'), { x: x + 12, y: top - 80, size: 8.5, font: bold, color: INK })
+    page.drawText(Sheet.safe(signature.signerMobile ? `${signature.signerName ?? '—'} · ${signature.signerMobile}` : (signature.signerName ?? '—')), { x: x + 12, y: top - 80, size: 8.5, font: bold, color: INK })
     page.drawText(Sheet.safe(`${signature.type.replace(/_/g, ' ').toLowerCase()} · ${when(signature.signedAt, options.timeZone)}`), {
       x: x + 12,
       y: top - 91,

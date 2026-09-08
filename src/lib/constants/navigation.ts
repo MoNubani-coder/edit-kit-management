@@ -52,7 +52,10 @@ export const MAIN_NAV: readonly NavItem[] = [
   { href: '/bookings', label: 'Bookings', icon: 'bookings', description: 'Reservations, handovers and returns', anyOf: ['booking.read', 'booking.readOwn'] },
   { href: '/kits', label: 'Kits', icon: 'kits', description: 'Kit availability and contents', anyOf: ['kit.read'] },
   { href: '/assets', label: 'Equipment', icon: 'assets', description: 'Assets, accessories and maintenance', anyOf: ['asset.read'] },
-  { href: '/editors', label: 'Editors', icon: 'editors', description: 'Internal and external editors', anyOf: ['editor.read'] },
+  // Editors was removed from the primary navigation by the user-directed
+  // review (2026-09-08): the requester is typed into the booking now. The
+  // directory remains at /editors for historical bookings, reachable by URL
+  // with the same permission.
   { href: '/issues', label: 'Issues', icon: 'issues', description: 'Missing, damaged and faulty equipment', anyOf: ['issue.read'] },
   { href: '/reports', label: 'Reports', icon: 'reports', description: 'Operational reports and exports', anyOf: ['report.read'] },
 ]
@@ -60,7 +63,9 @@ export const MAIN_NAV: readonly NavItem[] = [
 export const ADMIN_NAV: readonly NavItem[] = [
   { href: '/admin/users', label: 'Users', icon: 'users', description: 'Accounts, roles, suspension and password resets', anyOf: ['admin.users.manage'] },
   { href: '/admin/categories', label: 'Categories', icon: 'categories', description: 'Equipment categories and accessory types', anyOf: ['admin.categories.manage'] },
-  { href: '/admin/software', label: 'Software', icon: 'software', description: 'Applications kits are expected to carry', anyOf: ['admin.software.manage'] },
+  // Software was removed from the administration navigation by the same
+  // review: software verification no longer gates a handover. The catalogue
+  // remains at /admin/software, reachable by URL with the same permission.
   { href: '/admin/checklists', label: 'Checklist Templates', icon: 'checklists', description: 'Handover and return checklists', anyOf: ['admin.checklists.manage'] },
   { href: '/admin/audit-logs', label: 'Audit Logs', icon: 'audit', description: 'Append-only record of every change', anyOf: ['admin.audit.read'] },
   { href: '/admin/settings', label: 'Settings', icon: 'settings', description: 'Runtime-editable application settings', anyOf: ['admin.settings.manage'] },

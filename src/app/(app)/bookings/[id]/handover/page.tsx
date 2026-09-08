@@ -15,6 +15,7 @@ import { IdentityPanels } from '@/features/handover/components/identity-panels'
 import { SignaturePad } from '@/features/handover/components/signature-pad'
 import { StepCard, type StepState } from '@/features/handover/components/step-card'
 import { PhotoEvidence } from '@/features/photos/components/photo-evidence'
+import { requesterOf } from '@/lib/booking-requester'
 import { env } from '@/lib/env'
 import { requirePermissionForPage } from '@/server/auth/page-guards'
 import { can } from '@/server/auth/permissions'
@@ -29,7 +30,7 @@ export const dynamic = 'force-dynamic'
 
 /**
  * The handover workspace: identities first, then the numbered stages -
- * equipment, checklist and software, signatures, completion. Everything the
+ * equipment, checklist review, signatures, completion. Everything the
  * page shows about eligibility and readiness comes from the service; the
  * forms only post ids and answers.
  */
@@ -41,6 +42,7 @@ export default async function HandoverPage({ params }: { params: Promise<{ id: s
 
   const { booking, inspection, bookingBlockers, verdict, canPerform, canComplete, completed } = workspace
   const timeZone = env.APP_TIMEZONE
+  const requester = requesterOf(booking)
   const summary = completed ? await loadHandoverSummary(prisma, id) : null
   const photos = inspection ? await loadInspectionPhotos(prisma, inspection.id) : []
 
@@ -52,7 +54,7 @@ export default async function HandoverPage({ params }: { params: Promise<{ id: s
         : 'todo'
     : undefined
   const checklistState: StepState | undefined = inspection
-    ? verdict?.blockers.some((blocker) => blocker.code === 'checklist' || blocker.code === 'software')
+    ? verdict?.blockers.some((blocker) => blocker.code === 'checklist')
       ? inspection.checklist.some((item) => item.result)
         ? 'blocked'
         : 'todo'
@@ -69,8 +71,8 @@ export default async function HandoverPage({ params }: { params: Promise<{ id: s
           <span className="flex flex-wrap items-center gap-2">
             <span className="font-mono text-foreground">{booking.bookingNumber}</span>
             <BookingStatusBadge status={booking.status} />
-            <span className="font-medium text-foreground">{booking.editor.fullName}</span>
-            <Badge tone={booking.editor.isExternal ? 'neutral' : 'blue'}>{booking.editor.isExternal ? 'External' : 'Internal'}</Badge>
+            <span className="font-medium text-foreground">{requester.name}</span>
+            {requester.isExternal !== null ? <Badge tone={requester.isExternal ? 'neutral' : 'blue'}>{requester.isExternal ? 'External' : 'Internal'}</Badge> : null}
             <span className="text-subtle">·</span>
             <span>{booking.kit.name}</span>
           </span>
@@ -107,7 +109,7 @@ export default async function HandoverPage({ params }: { params: Promise<{ id: s
         ) : null}
 
         {!completed && !inspection ? (
-          <StepCard step={1} id="start" title="Start the handover" description="Snapshots the kit's equipment, accessories, software list and the checklist as they stand right now. The template can change afterwards without touching this handover." state="todo">
+          <StepCard step={1} id="start" title="Start the handover" description="Snapshots the kit's equipment and accessories as they stand right now, and carries in the checklist prepared on the booking. A later template edit cannot touch this handover." state="todo">
             {canPerform && bookingBlockers.length === 0 ? (
               <StartHandoverForm bookingId={booking.id} />
             ) : (
@@ -133,18 +135,18 @@ export default async function HandoverPage({ params }: { params: Promise<{ id: s
               </div>
             </StepCard>
 
-            <StepCard step={2} id="checklist" title="Checklist and software" description="Required checks must pass or be marked not applicable; required applications must be installed." state={checklistState}>
-              <ChecklistForm bookingId={booking.id} checklist={inspection.checklist} software={inspection.software} templateName={null} disabled={!canPerform} />
+            <StepCard step={2} id="checklist" title="Checklist review" description="Prepared on the booking before the handover. Read it through; amend an answer only if something has changed since." state={checklistState}>
+              <ChecklistForm bookingId={booking.id} checklist={inspection.checklist} preparedAt={booking.checklistPreparedAt} timeZone={timeZone} disabled={!canPerform} />
             </StepCard>
 
-            <StepCard step={3} id="signatures" title="Signatures" description="Both parties sign on this device. The editor signature is attributed to the editor named on the booking; the engineer signature to the signed-in engineer." state={signatureState}>
+            <StepCard step={3} id="signatures" title="Signatures" description="Both parties sign on this device. The recipient enters their name and mobile and signs; the engineer's signature is attributed to the signed-in account automatically." state={signatureState}>
               <div className="grid gap-4 lg:grid-cols-2">
-                <SignaturePad bookingId={booking.id} role="EDITOR" signerName={booking.editor.fullName} existing={inspection.signatures.find((signature) => signature.type === 'HANDOVER_EDITOR') ?? null} disabled={!canPerform} timeZone={timeZone} />
+                <SignaturePad bookingId={booking.id} role="EDITOR" signerName={requester.name} recipient={{ name: requester.name, mobile: requester.mobile }} existing={inspection.signatures.find((signature) => signature.type === 'HANDOVER_EDITOR') ?? null} disabled={!canPerform} timeZone={timeZone} />
                 <SignaturePad bookingId={booking.id} role="ENGINEER" signerName={actor.name} existing={inspection.signatures.find((signature) => signature.type === 'HANDOVER_ENGINEER') ?? null} disabled={!canPerform} timeZone={timeZone} />
               </div>
             </StepCard>
 
-            <StepCard step={4} id="complete" title="Review and complete" description="The server re-checks the booking, the editor, the kit's readiness, every recorded answer and both signatures inside one transaction before anything changes." state={canComplete ? 'done' : 'blocked'}>
+            <StepCard step={4} id="complete" title="Review and complete" description="The server re-checks the booking, the requester, the kit's readiness, every recorded answer and both signatures inside one transaction before anything changes." state={canComplete ? 'done' : 'blocked'}>
               {verdict && verdict.blockers.length > 0 ? (
                 <Alert variant="warning" title={`${verdict.blockers.length} ${verdict.blockers.length === 1 ? 'point stands' : 'points stand'} in the way`} className="mb-4">
                   <ul className="mt-1 list-disc space-y-0.5 pl-4">
@@ -164,7 +166,7 @@ export default async function HandoverPage({ params }: { params: Promise<{ id: s
                 </Alert>
               ) : null}
               {can(actor, 'handover.complete') ? (
-                <CompleteHandoverForm bookingId={booking.id} bookingNumber={booking.bookingNumber} editorName={booking.editor.fullName} kitCode={booking.kit.kitCode} ready={canComplete} />
+                <CompleteHandoverForm bookingId={booking.id} bookingNumber={booking.bookingNumber} editorName={requester.name} kitCode={booking.kit.kitCode} ready={canComplete} />
               ) : (
                 <p className="text-sm text-muted">Completing the handover needs the handover.complete permission.</p>
               )}

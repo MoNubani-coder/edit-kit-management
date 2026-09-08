@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { pageSizeSchema } from '@/lib/pagination'
+
 import { formDataToObject } from './assets'
 
 /**
@@ -69,7 +71,7 @@ const userListParamsSchema = z.object({
   sort: z.enum(USER_SORT_KEYS).catch('name'),
   dir: z.enum(['asc', 'desc']).catch('asc'),
   page: z.coerce.number().int().min(1).catch(1),
-  pageSize: z.coerce.number().int().min(10).max(100).catch(USER_DEFAULT_PAGE_SIZE),
+  pageSize: pageSizeSchema(USER_DEFAULT_PAGE_SIZE),
 })
 
 export type UserListParams = z.output<typeof userListParamsSchema>
@@ -82,7 +84,9 @@ export function parseUserListParams(raw: Record<string, string | string[] | unde
 }
 
 export function usersHref(params: UserListParams, overrides: Partial<UserListParams> = {}): string {
-  const merged = { ...params, ...overrides }
+  // Changing the question restarts at the first page; only paging keeps the page.
+  const resetPage = Object.keys(overrides).some((key) => key !== 'page')
+  const merged = { ...params, ...overrides, page: resetPage ? 1 : overrides.page ?? params.page }
   const search = new URLSearchParams()
   if (merged.q) search.set('q', merged.q)
   if (merged.filter !== 'all') search.set('filter', merged.filter)

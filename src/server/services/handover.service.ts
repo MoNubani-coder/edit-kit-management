@@ -14,13 +14,13 @@ import {
   getLiveHandover,
   getLiveSignatureInternal,
   getSnapshotMembers,
-  getSnapshotSoftware,
   type HandoverBooking,
   type HandoverInspection,
   type HandoverSummary,
 } from '@/server/dal/handover.dal'
 import type { Db } from '@/server/db/prisma'
 import { recordAudit } from '@/server/services/audit.service'
+import { requesterOf } from '@/lib/booking-requester'
 import { DomainError, uniqueViolationField } from '@/server/services/errors'
 import { evaluateKitReadinessForBooking, type KitAvailability } from '@/server/services/kits.service'
 import { decodeSignatureImage, sha256, SignatureImageError, type SignatureStore } from '@/server/storage/signature-store'
@@ -52,7 +52,7 @@ import { decodeSignatureImage, sha256, SignatureImageError, type SignatureStore 
 // Eligibility and verification rules (pure where possible)
 // -----------------------------------------------------------------------------
 
-export type HandoverBlockerCode = 'status' | 'editor' | 'kit' | 'readiness' | 'equipment' | 'checklist' | 'software' | 'signature'
+export type HandoverBlockerCode = 'status' | 'editor' | 'kit' | 'readiness' | 'equipment' | 'checklist' | 'signature'
 
 export interface HandoverBlocker {
   code: HandoverBlockerCode
@@ -82,8 +82,10 @@ export function bookingHandoverBlockers(booking: HandoverBooking, readiness: Kit
           : `${booking.bookingNumber} is ${STATUS_LABEL[booking.status]}; only a booking that is ready for handover can be handed over.`,
     })
   }
-  if (booking.editor.deleted) blockers.push({ code: 'editor', reason: `${booking.editor.fullName} has been removed from the editor directory.` })
-  else if (!booking.editor.isActive) blockers.push({ code: 'editor', reason: `${booking.editor.fullName} is inactive. Reactivate the editor or cancel the booking.` })
+  // A directory profile, when the booking has one, must still be live. A booking
+  // that carries its own requester has nothing here to check.
+  if (booking.editor?.deleted) blockers.push({ code: 'editor', reason: `${requesterOf(booking).name} has been removed from the editor directory.` })
+  else if (booking.editor && !booking.editor.isActive) blockers.push({ code: 'editor', reason: `${requesterOf(booking).name} is inactive. Reactivate the editor or cancel the booking.` })
   if (booking.kit.deleted) blockers.push({ code: 'kit', reason: `Kit ${booking.kit.kitCode} has been removed from the inventory.` })
   else if (booking.status === BookingStatus.READY_FOR_HANDOVER && booking.kit.status !== KitStatus.RESERVED) {
     blockers.push({ code: 'kit', reason: `Kit ${booking.kit.kitCode} is not set aside for this booking (its status is ${booking.kit.status.toLowerCase().replace('_', ' ')}).` })
@@ -144,10 +146,11 @@ export function verificationVerdict(inspection: HandoverInspection): Verificatio
     if (!item.isRequired && item.result?.status === 'FAIL') warnings.push(`Optional check "${item.label}" failed.`)
   }
 
+  // Software no longer gates a handover (user-directed review, 2026-09-08). An
+  // application recorded as not installed is noted on the document, nothing more.
   for (const check of inspection.software) {
     const ok = check.status === 'INSTALLED' || check.status === 'NOT_APPLICABLE'
-    if (check.isRequired && !ok) blockers.push({ code: 'software', reason: `${check.nameSnapshot}${check.versionSnapshot ? ` ${check.versionSnapshot}` : ''} is ${check.status.toLowerCase().replace('_', ' ')}.` })
-    else if (!ok) warnings.push(`${check.nameSnapshot} (optional) is ${check.status.toLowerCase().replace('_', ' ')}.`)
+    if (!ok) warnings.push(`${check.nameSnapshot}${check.versionSnapshot ? ` ${check.versionSnapshot}` : ''} is ${check.status.toLowerCase().replace('_', ' ')}; noted, not blocking.`)
   }
 
   const types = new Set(inspection.signatures.map((signature) => signature.type))
@@ -209,7 +212,7 @@ export async function startHandover(db: Db, actor: Actor, bookingId: string): Pr
     const blockers = bookingHandoverBlockers(booking, await kitReadiness(tx, booking.kit.id))
     if (blockers.length > 0) throw new DomainError('lifecycle', blockers.map((blocker) => blocker.reason).join(' '))
 
-    const [members, software, template] = await Promise.all([getSnapshotMembers(tx, booking.kit.id), getSnapshotSoftware(tx, booking.kit.id), getChecklistTemplateForKit(tx, booking.kit.defaultChecklistTemplateId)])
+    const [members, template] = await Promise.all([getSnapshotMembers(tx, booking.kit.id), getChecklistTemplateForKit(tx, booking.kit.defaultChecklistTemplateId)])
 
     let inspection: { id: string }
     try {
@@ -261,21 +264,12 @@ export async function startHandover(db: Db, actor: Actor, bookingId: string): Pr
       }
     }
 
-    if (software.length > 0) {
-      await tx.softwareCheck.createMany({
-        data: software.map((row) => ({
-          inspectionId: inspection.id,
-          softwareApplicationId: row.softwareApplicationId,
-          sortOrder: row.sortOrder,
-          nameSnapshot: row.name,
-          versionSnapshot: row.version,
-          vendorSnapshot: row.vendor,
-        })),
-      })
-    }
+    // Software is no longer verified at handover: no SoftwareCheck rows are
+    // written for new handovers. Older records keep theirs.
 
-    // The booking's own checklist: copied once, from the kit's template (or the
-    // default) as it reads today. Reopening never copies again.
+    // The booking's own checklist. It is normally copied when the booking is
+    // created and prepared before this point; a booking made before that rule
+    // gets its copy now. Reopening never copies again.
     const existingItems = await tx.bookingChecklistItem.count({ where: { bookingId } })
     if (existingItems === 0 && template) {
       await tx.bookingChecklistItem.createMany({
@@ -292,12 +286,25 @@ export async function startHandover(db: Db, actor: Actor, bookingId: string): Pr
       if (booking.checklistTemplateId !== template.id) await tx.booking.update({ where: { id: bookingId }, data: { checklistTemplateId: template.id } })
     }
 
+    // Carry the answers given during preparation into this handover, so the
+    // review step, the verdict and the frozen document all read them the same
+    // way they always have. The handover may still amend them before completing.
+    const prepared = await tx.bookingChecklistItem.findMany({
+      where: { bookingId, preparedStatus: { not: null } },
+      select: { id: true, preparedStatus: true, preparedNotes: true },
+    })
+    if (prepared.length > 0) {
+      await tx.checklistResult.createMany({
+        data: prepared.map((item) => ({ inspectionId: inspection.id, bookingChecklistItemId: item.id, status: item.preparedStatus!, notes: item.preparedNotes })),
+      })
+    }
+
     await recordAudit(tx, {
       action: AuditAction.HANDOVER_STARTED,
       entityType: 'Booking',
       entityId: bookingId,
       ...actorFields(actor),
-      summary: `${booking.bookingNumber} handover started for ${booking.editor.fullName}: ${members.length} ${members.length === 1 ? 'item' : 'items'}, ${software.length} applications, ${template ? template.items.length : 0} checks snapshotted`,
+      summary: `${booking.bookingNumber} handover started for ${requesterOf(booking).name}: ${members.length} ${members.length === 1 ? 'item' : 'items'} snapshotted, ${prepared.length} prepared ${prepared.length === 1 ? 'check' : 'checks'} carried in`,
       metadata: { inspectionId: inspection.id, templateId: template?.id ?? null },
     })
 
@@ -401,6 +408,9 @@ export async function saveChecklistVerification(db: Db, actor: Actor, bookingId:
 export interface SignatureContext {
   ipAddress?: string | null
   userAgent?: string | null
+  /** The recipient's typed identity. Used for the EDITOR role only; ignored for the engineer. */
+  recipientName?: string | null
+  recipientMobile?: string | null
 }
 
 const SIGNATURE_TYPE: Record<SignerRoleValue, SignatureType> = { EDITOR: SignatureType.HANDOVER_EDITOR, ENGINEER: SignatureType.HANDOVER_ENGINEER }
@@ -432,10 +442,21 @@ export async function captureSignature(
   const booking = await requireBooking(db, bookingId)
   assertReadyForHandover(booking)
   const inspection = await requireOpenHandover(db, bookingId)
-  if (role === 'EDITOR' && (booking.editor.deleted || !booking.editor.isActive)) {
+  if (role === 'EDITOR' && booking.editor && (booking.editor.deleted || !booking.editor.isActive)) {
     throw new DomainError('lifecycle', bookingHandoverBlockers(booking, null).find((blocker) => blocker.code === 'editor')?.reason ?? 'The editor cannot sign.')
   }
   const engineerProfile = role === 'ENGINEER' ? await db.engineerProfile.findFirst({ where: { userId: actor.id, deletedAt: null }, select: { id: true, staffId: true } }) : null
+
+  // The recipient signs with a typed name and mobile. Both default to the
+  // booking's own requester record, so a caller that posts neither still
+  // attributes the signature to the person the booking is for. Nothing posted
+  // can ever name the engineer: that identity is the actor's, full stop.
+  const requester = requesterOf(booking)
+  const recipientName = role === 'EDITOR' ? context.recipientName?.trim() || requester.name : null
+  const recipientMobile = role === 'EDITOR' ? context.recipientMobile?.trim() || requester.mobile : null
+  if (role === 'EDITOR' && (!recipientName || recipientName.length < 2)) {
+    throw new DomainError('validation', 'Enter the name of the person receiving the kit.', { recipientName: 'Enter the name of the person receiving the kit.' })
+  }
 
   const type = SIGNATURE_TYPE[role]
   const stored = await store.save({ bookingId, type, bytes })
@@ -464,10 +485,11 @@ export async function captureSignature(
             type,
             signerRole: role === 'EDITOR' ? SignerRole.EDITOR : SignerRole.ENGINEER,
             signerUserId: role === 'ENGINEER' ? actor.id : null,
-            signerEditorProfileId: role === 'EDITOR' ? booking.editor.id : null,
+            signerEditorProfileId: role === 'EDITOR' ? booking.editor?.id ?? null : null,
             signerEngineerProfileId: role === 'ENGINEER' ? engineerProfile?.id ?? null : null,
-            signerName: role === 'EDITOR' ? booking.editor.fullName : actor.name,
-            signerStaffId: role === 'EDITOR' ? booking.editor.staffId : engineerProfile?.staffId ?? null,
+            signerName: role === 'EDITOR' ? recipientName! : actor.name,
+            signerStaffId: role === 'EDITOR' ? requester.staffId : engineerProfile?.staffId ?? null,
+            signerMobile: role === 'EDITOR' ? recipientMobile : null,
             storageProvider: stored.provider,
             imagePath: stored.path,
             imageMimeType: 'image/png',
@@ -486,7 +508,7 @@ export async function captureSignature(
         entityType: 'Booking',
         entityId: bookingId,
         ...actorFields(actor),
-        summary: role === 'EDITOR' ? `${booking.bookingNumber} signed by editor ${booking.editor.fullName}` : `${booking.bookingNumber} signed by engineer ${actor.name}`,
+        summary: role === 'EDITOR' ? `${booking.bookingNumber} signed by recipient ${recipientName}` : `${booking.bookingNumber} signed by engineer ${actor.name}`,
         metadata: { inspectionId: inspection.id, signatureId: signature.id, type },
       })
       await refreshInspectionStatus(tx, inspection.id, bookingId)
@@ -534,13 +556,23 @@ export async function completeHandover(db: Db, actor: Actor, bookingId: string):
       if (!editorSignature || !engineerSignature) throw new DomainError('lifecycle', 'Both signatures are required to complete the handover.')
 
       const now = new Date()
+      const requester = requesterOf(booking)
       const documentSnapshot = {
         version: 1,
         booking: { number: booking.bookingNumber, bookingStart: booking.bookingStart.toISOString(), bookingEnd: booking.bookingEnd.toISOString(), expectedReturnDate: booking.expectedReturnDate.toISOString(), purpose: booking.purpose },
         collectedAt: now.toISOString(),
-        editor: { name: booking.editor.fullName, staffId: booking.editor.staffId, type: booking.editor.isExternal ? 'EXTERNAL' : 'INTERNAL', contactNumber: booking.editor.contactNumber, company: booking.editor.company, department: booking.editor.department },
+        editor: {
+          name: requester.name,
+          staffId: requester.staffId,
+          type: requester.isExternal === null ? null : requester.isExternal ? 'EXTERNAL' : 'INTERNAL',
+          contactNumber: requester.mobile,
+          company: booking.editor?.company ?? null,
+          department: booking.editor?.department ?? null,
+          projectName: requester.projectName,
+          workOrder: requester.workOrder,
+        },
         kit: { code: booking.kit.kitCode, name: booking.kit.name, barcode: booking.kit.admBarcode, suitcaseStatus: inspection.suitcaseStatus },
-        engineer: { assigned: booking.engineer.fullName, handedOverBy: actor.name },
+        engineer: { assigned: booking.engineer?.fullName ?? null, handedOverBy: actor.name, preparedBy: booking.createdBy.name },
         equipment: inspection.lines.map((line) => ({
           assetCode: line.assetCodeSnapshot,
           name: line.nameSnapshot,
@@ -559,7 +591,7 @@ export async function completeHandover(db: Db, actor: Actor, bookingId: string):
         checklist: inspection.checklist.map((item) => ({ label: item.label, required: item.isRequired, status: item.result?.status ?? null, notes: item.result?.notes ?? null })),
         generalNotes: inspection.generalNotes,
         signatures: [
-          { type: 'HANDOVER_EDITOR', signerName: editorSignature.signerName, signedAt: editorSignature.signedAt.toISOString(), imageHash: editorSignature.imageHash },
+          { type: 'HANDOVER_EDITOR', signerName: editorSignature.signerName, signerMobile: editorSignature.signerMobile ?? null, signedAt: editorSignature.signedAt.toISOString(), imageHash: editorSignature.imageHash },
           { type: 'HANDOVER_ENGINEER', signerName: engineerSignature.signerName, signedAt: engineerSignature.signedAt.toISOString(), imageHash: engineerSignature.imageHash },
         ],
       }
@@ -592,7 +624,7 @@ export async function completeHandover(db: Db, actor: Actor, bookingId: string):
         entityType: 'Booking',
         entityId: bookingId,
         ...actorFields(actor),
-        summary: `${booking.bookingNumber} handed over to ${booking.editor.fullName} by ${actor.name}: kit ${booking.kit.kitCode}, ${handedOver.length} ${handedOver.length === 1 ? 'item' : 'items'}`,
+        summary: `${booking.bookingNumber} handed over to ${requesterOf(booking).name} by ${actor.name}: kit ${booking.kit.kitCode}, ${handedOver.length} ${handedOver.length === 1 ? 'item' : 'items'}`,
         newValue: { collectedAt: now.toISOString(), expectedReturnDate: booking.expectedReturnDate.toISOString(), items: handedOver },
         metadata: { inspectionId: inspection.id, detail: 'Collected' },
       })
@@ -604,7 +636,7 @@ export async function completeHandover(db: Db, actor: Actor, bookingId: string):
         summary: `${booking.bookingNumber} Ready for handover → Checked out`,
         previousValue: { status: BookingStatus.READY_FOR_HANDOVER },
         newValue: { status: BookingStatus.CHECKED_OUT },
-        metadata: { detail: `Collected by ${booking.editor.fullName}` },
+        metadata: { detail: `Collected by ${requesterOf(booking).name}` },
       })
       await recordAudit(tx, {
         action: AuditAction.KIT_STATUS_CHANGED,

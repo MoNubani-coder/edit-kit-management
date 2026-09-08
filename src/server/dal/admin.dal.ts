@@ -3,6 +3,7 @@ import 'server-only'
 import { type ChecklistPhase, type Prisma, type UserRole, UserStatus } from '@prisma/client'
 
 import type { UserFilter, UserListParams } from '@/lib/validation/admin'
+import { clampPage, pageCountFor } from '@/lib/pagination'
 import type { Db } from '@/server/db/prisma'
 
 /**
@@ -144,18 +145,12 @@ export async function listUsersPage(db: Db, params: UserListParams, now: Date): 
 
   const where: Prisma.UserWhereInput = { AND: clauses }
 
-  const [total, records] = await Promise.all([
-    db.user.count({ where }),
-    db.user.findMany({ where, select: userSelect, orderBy: userOrderBy(params), skip: (params.page - 1) * params.pageSize, take: params.pageSize }),
-  ])
+  const total = await db.user.count({ where })
+  const pageCount = pageCountFor(total, params.pageSize)
+  const page = clampPage(params.page, pageCount)
+  const records = await db.user.findMany({ where, select: userSelect, orderBy: userOrderBy(params), skip: (page - 1) * params.pageSize, take: params.pageSize })
 
-  return {
-    rows: records.map(toUserRow),
-    total,
-    page: params.page,
-    pageSize: params.pageSize,
-    pageCount: Math.max(1, Math.ceil(total / params.pageSize)),
-  }
+  return { rows: records.map(toUserRow), total, page, pageSize: params.pageSize, pageCount }
 }
 
 export async function countUsersByFilter(db: Db, now: Date): Promise<Record<UserFilter, number>> {
@@ -231,6 +226,60 @@ export async function getSoftware(db: Db, id: string): Promise<SoftwareRow | nul
   return rows.find((row) => row.id === id) ?? null
 }
 
+export interface PagedRows<Row> {
+  rows: Row[]
+  total: number
+  page: number
+  pageSize: number
+  pageCount: number
+}
+
+export interface ReferencePageParams {
+  page: number
+  pageSize: number
+  includeInactive?: boolean
+}
+
+/** The Software admin table, one page at a time. */
+export async function listSoftwarePage(db: Db, params: ReferencePageParams): Promise<PagedRows<SoftwareRow>> {
+  const where: Prisma.SoftwareApplicationWhereInput = { deletedAt: null, ...(params.includeInactive ? {} : { isActive: true }) }
+  const total = await db.softwareApplication.count({ where })
+  const pageCount = pageCountFor(total, params.pageSize)
+  const page = clampPage(params.page, pageCount)
+  const records = await db.softwareApplication.findMany({
+    where,
+    select: {
+      id: true,
+      name: true,
+      vendor: true,
+      version: true,
+      licenseType: true,
+      notes: true,
+      sortOrder: true,
+      isActive: true,
+      updatedAt: true,
+      kitSoftware: { select: { isRequired: true } },
+    },
+    orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    skip: (page - 1) * params.pageSize,
+    take: params.pageSize,
+  })
+  const rows = records.map((record) => ({
+    id: record.id,
+    name: record.name,
+    vendor: record.vendor,
+    version: record.version,
+    licenseType: record.licenseType,
+    notes: record.notes,
+    sortOrder: record.sortOrder,
+    isActive: record.isActive,
+    updatedAt: record.updatedAt,
+    kitCount: record.kitSoftware.length,
+    requiredKitCount: record.kitSoftware.filter((link) => link.isRequired).length,
+  }))
+  return { rows, total, page, pageSize: params.pageSize, pageCount }
+}
+
 // -----------------------------------------------------------------------------
 // Checklist templates
 // -----------------------------------------------------------------------------
@@ -294,6 +343,47 @@ export async function listChecklistTemplates(db: Db, options: { includeInactive?
     kitCount: record._count.kits,
     bookingCount: record._count.bookings,
   }))
+}
+
+/** The Checklist Templates admin table, one page at a time. */
+export async function listChecklistTemplatesPage(db: Db, params: ReferencePageParams): Promise<PagedRows<ChecklistTemplateRow>> {
+  const where: Prisma.ChecklistTemplateWhereInput = { deletedAt: null, ...(params.includeInactive ? {} : { isActive: true }) }
+  const total = await db.checklistTemplate.count({ where })
+  const pageCount = pageCountFor(total, params.pageSize)
+  const page = clampPage(params.page, pageCount)
+  const records = await db.checklistTemplate.findMany({
+    where,
+    select: {
+      id: true,
+      name: true,
+      description: true,
+      version: true,
+      isDefault: true,
+      isActive: true,
+      updatedAt: true,
+      items: { select: { phase: true, isRequired: true } },
+      _count: { select: { kits: true, bookings: true } },
+    },
+    orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+    skip: (page - 1) * params.pageSize,
+    take: params.pageSize,
+  })
+  const rows = records.map((record) => ({
+    id: record.id,
+    name: record.name,
+    description: record.description,
+    version: record.version,
+    isDefault: record.isDefault,
+    isActive: record.isActive,
+    updatedAt: record.updatedAt,
+    itemCount: record.items.length,
+    handoverCount: record.items.filter((item) => item.phase === 'HANDOVER' || item.phase === 'BOTH').length,
+    returnCount: record.items.filter((item) => item.phase === 'RETURN' || item.phase === 'BOTH').length,
+    requiredCount: record.items.filter((item) => item.isRequired).length,
+    kitCount: record._count.kits,
+    bookingCount: record._count.bookings,
+  }))
+  return { rows, total, page, pageSize: params.pageSize, pageCount }
 }
 
 export interface ChecklistTemplateDetail extends ChecklistTemplateRow {

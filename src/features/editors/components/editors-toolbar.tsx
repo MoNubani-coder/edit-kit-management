@@ -3,7 +3,7 @@ import Link from 'next/link'
 
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import type { EditorListParams } from '@/lib/validation/editors'
+import { EDITOR_DEFAULT_PAGE_SIZE, type EditorListParams } from '@/lib/validation/editors'
 import { cn } from '@/lib/utils/cn'
 
 /** Search as a GET form; an exact staff ID opens the editor directly. */
@@ -13,6 +13,7 @@ export function EditorsToolbar({ params, clearHref }: { params: EditorListParams
       {params.view !== 'all' ? <input type="hidden" name="view" value={params.view} /> : null}
       {params.sort !== 'fullName' ? <input type="hidden" name="sort" value={params.sort} /> : null}
       {params.dir !== 'asc' ? <input type="hidden" name="dir" value={params.dir} /> : null}
+      {params.pageSize !== EDITOR_DEFAULT_PAGE_SIZE ? <input type="hidden" name="pageSize" value={params.pageSize} /> : null}
 
       <div className="relative">
         <Search aria-hidden className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-subtle" />

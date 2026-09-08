@@ -1,6 +1,6 @@
 import 'server-only'
 
-import { AuditAction, BookingStatus, KitStatus, NumberScope } from '@prisma/client'
+import { AuditAction, BookingStatus, type ChecklistPhase, ChecklistStatus, InspectionType, KitStatus, NumberScope } from '@prisma/client'
 
 import {
   type BookingSchedule,
@@ -16,10 +16,11 @@ import {
   scheduleErrors,
 } from '@/lib/booking-rules'
 import { env } from '@/lib/env'
-import { type CancelBookingInput, type CreateBookingInput, parseSchedule, type UpdateBookingInput } from '@/lib/validation/bookings'
+import { type CancelBookingInput, type CreateBookingInput, parseSchedule, type PrepareChecklistInput, type UpdateBookingInput } from '@/lib/validation/bookings'
 import { can } from '@/server/auth/permissions'
 import { type Actor, requirePermission } from '@/server/auth/session'
 import {
+  type BookableEditor,
   type BookingActivityEvent,
   type BookingDetail,
   type BookingLifecycleContext,
@@ -40,7 +41,7 @@ import {
   type OverlappingBooking,
 } from '@/server/dal/bookings.dal'
 import { searchActiveEditors } from '@/server/dal/editors.dal'
-import { getHandoverSummary, type HandoverSummary } from '@/server/dal/handover.dal'
+import { type BookingChecklistItemRow, getBookingChecklistItems, getChecklistTemplateForKit, getHandoverSummary, type HandoverSummary } from '@/server/dal/handover.dal'
 import { getBookingPhotos, type PhotoMeta } from '@/server/dal/attachments.dal'
 import { availableDocuments } from '@/server/services/documents.service'
 import type { DocumentKind } from '@/server/documents/snapshot'
@@ -146,6 +147,164 @@ async function requireEngineer(tx: Db, engineerId: string): Promise<EngineerOpti
   return engineer
 }
 
+/**
+ * The engineer to record on the booking: an explicit profile when one was
+ * posted (the legacy path), otherwise the authenticated preparer's own profile,
+ * or none when they have none. The preparer themselves is always `createdById`,
+ * which is where "Prepared by" is read from.
+ */
+async function engineerFor(tx: Db, actor: Actor, engineerId: string | undefined): Promise<EngineerOption | null> {
+  if (engineerId) return requireEngineer(tx, engineerId)
+  return tx.engineerProfile.findFirst({
+    where: { userId: actor.id, deletedAt: null, isActive: true },
+    select: { id: true, fullName: true, staffId: true, userId: true },
+  })
+}
+
+type RequesterInput = Pick<CreateBookingInput, 'requesterName' | 'requesterStaffId' | 'requesterMobile' | 'projectName' | 'workOrder'>
+
+/**
+ * The booking's own copy of who it is for: what was typed, or - on the legacy
+ * path - a snapshot of the profile taken now. Either way the booking carries
+ * the values from here on and never re-reads a profile for them.
+ */
+function requesterSnapshot(input: RequesterInput, editor: BookableEditor | null) {
+  return {
+    requesterName: input.requesterName ?? editor?.fullName ?? null,
+    requesterStaffId: input.requesterStaffId ?? editor?.staffId ?? null,
+    requesterMobile: input.requesterMobile ?? editor?.contactNumber ?? null,
+    projectName: input.projectName ?? null,
+    workOrder: input.workOrder ?? null,
+  }
+}
+
+/**
+ * Copies the kit's checklist template onto the booking as its own items, so the
+ * checklist can be prepared before the handover and a later template edit
+ * cannot change it. A booking already holding items keeps them.
+ */
+async function copyChecklistOntoBooking(tx: Db, bookingId: string, kitTemplateId: string | null): Promise<{ templateId: string | null; count: number }> {
+  const existing = await tx.bookingChecklistItem.count({ where: { bookingId } })
+  if (existing > 0) return { templateId: null, count: existing }
+  const template = await getChecklistTemplateForKit(tx, kitTemplateId)
+  if (!template) return { templateId: null, count: 0 }
+  await tx.bookingChecklistItem.createMany({
+    data: template.items.map((item) => ({
+      bookingId,
+      sourceTemplateItemId: item.sourceTemplateItemId,
+      label: item.label,
+      description: item.description,
+      phase: item.phase,
+      isRequired: item.isRequired,
+      sortOrder: item.sortOrder,
+    })),
+  })
+  await tx.booking.update({ where: { id: bookingId }, data: { checklistTemplateId: template.id } })
+  return { templateId: template.id, count: template.items.length }
+}
+
+// -----------------------------------------------------------------------------
+// The pre-handover checklist
+// -----------------------------------------------------------------------------
+
+export const HANDOVER_CHECK_PHASES: readonly ChecklistPhase[] = ['HANDOVER', 'BOTH']
+
+export interface ChecklistPreparation {
+  items: BookingChecklistItemRow[]
+  /** Handover-phase checks: the ones that must be done before the kit is set aside. */
+  handoverCount: number
+  required: number
+  answered: number
+  passed: number
+  failed: number
+  /** Every required handover check is passed or marked not applicable. */
+  complete: boolean
+  /** Required handover checks still without an acceptable answer. */
+  outstanding: string[]
+}
+
+/** Where the booking's checklist stands. Pure, so the page and the gate agree. */
+export function checklistPreparation(items: BookingChecklistItemRow[]): ChecklistPreparation {
+  const handover = items.filter((item) => HANDOVER_CHECK_PHASES.includes(item.phase))
+  const required = handover.filter((item) => item.isRequired)
+  const outstanding = required.filter((item) => item.preparedStatus !== ChecklistStatus.PASS && item.preparedStatus !== ChecklistStatus.NOT_APPLICABLE)
+  return {
+    items,
+    handoverCount: handover.length,
+    required: required.length,
+    answered: handover.filter((item) => item.preparedStatus !== null).length,
+    passed: handover.filter((item) => item.preparedStatus === ChecklistStatus.PASS).length,
+    failed: handover.filter((item) => item.preparedStatus === ChecklistStatus.FAIL).length,
+    complete: outstanding.length === 0,
+    outstanding: outstanding.map((item) => item.label),
+  }
+}
+
+/** The gate between reserved and ready for handover. */
+async function assertChecklistPrepared(tx: Db, bookingId: string, bookingNumber: string): Promise<void> {
+  const state = checklistPreparation(await getBookingChecklistItems(tx, bookingId))
+  if (state.complete) return
+  const failed = state.items.filter((item) => item.isRequired && HANDOVER_CHECK_PHASES.includes(item.phase) && item.preparedStatus === ChecklistStatus.FAIL)
+  const list = (labels: string[]) => `${labels.slice(0, 4).join(', ')}${labels.length > 4 ? ' and more' : ''}`
+  const message =
+    failed.length > 0
+      ? `${bookingNumber} cannot be set aside for handover: ${failed.length} required ${failed.length === 1 ? 'check has' : 'checks have'} failed (${list(failed.map((item) => item.label))}). Fix the problem, or mark the check not applicable with a note.`
+      : `${bookingNumber} cannot be set aside for handover until its checklist is complete: ${state.outstanding.length} required ${state.outstanding.length === 1 ? 'check is' : 'checks are'} unanswered (${list(state.outstanding)}).`
+  throw new DomainError('lifecycle', message)
+}
+
+const PREPARABLE_STATUSES: readonly BookingStatus[] = [BookingStatus.DRAFT, BookingStatus.RESERVED, BookingStatus.READY_FOR_HANDOVER]
+
+/**
+ * Records checklist answers while the booking is being prepared, before any
+ * handover exists. Allowed until the handover actually starts; from then on the
+ * handover's own review step owns the answers. Answering the last required
+ * check stamps the booking as prepared; clearing one un-stamps it.
+ */
+export async function prepareChecklist(db: Db, actor: Actor, bookingId: string, input: PrepareChecklistInput): Promise<ChecklistPreparation> {
+  return inTransaction(db, async (tx) => {
+    const context = await requireLifecycle(tx, bookingId)
+    if (!PREPARABLE_STATUSES.includes(context.status)) {
+      throw new DomainError('lifecycle', `${context.bookingNumber} is ${STATUS_LABEL[context.status].toLowerCase()}; its checklist can no longer be prepared here.`)
+    }
+    const live = await tx.inspection.findFirst({ where: { bookingId, type: InspectionType.HANDOVER, voidedAt: null }, select: { id: true } })
+    if (live) throw new DomainError('lifecycle', `The handover for ${context.bookingNumber} has started. Review the checklist on the handover page instead.`)
+
+    const items = await getBookingChecklistItems(tx, bookingId)
+    const ids = new Set(items.map((item) => item.id))
+    const now = new Date()
+    let answered = 0
+    for (const answer of input.checks) {
+      if (!ids.has(answer.id)) throw new DomainError('validation', 'The checklist changed. Reload the page and try again.')
+      if (!answer.status) {
+        await tx.bookingChecklistItem.update({ where: { id: answer.id }, data: { preparedStatus: null, preparedNotes: null, preparedAt: null, preparedById: null } })
+        continue
+      }
+      answered += 1
+      await tx.bookingChecklistItem.update({
+        where: { id: answer.id },
+        data: { preparedStatus: answer.status, preparedNotes: answer.notes ?? null, preparedAt: now, preparedById: actor.id },
+      })
+    }
+
+    const state = checklistPreparation(await getBookingChecklistItems(tx, bookingId))
+    await tx.booking.update({
+      where: { id: bookingId },
+      data: state.complete ? { checklistPreparedAt: now, checklistPreparedById: actor.id, updatedById: actor.id } : { checklistPreparedAt: null, checklistPreparedById: null, updatedById: actor.id },
+    })
+
+    await recordAudit(tx, {
+      action: AuditAction.UPDATE,
+      entityType: 'Booking',
+      entityId: bookingId,
+      ...actorFields(actor),
+      summary: `${context.bookingNumber} checklist prepared: ${state.passed} of ${state.required} required checks passed${state.failed > 0 ? `, ${state.failed} failed` : ''}${state.complete ? '; ready to be set aside' : ''}`,
+      metadata: { answered, complete: state.complete, detail: state.complete ? 'Checklist complete' : `${state.outstanding.length} required ${state.outstanding.length === 1 ? 'check' : 'checks'} outstanding` },
+    })
+    return state
+  })
+}
+
 /** The kit exists and is live; readiness is a separate question answered at reservation time. */
 async function requireKit(tx: Db, kitId: string) {
   const kit = await tx.kit.findFirst({
@@ -235,9 +394,13 @@ export interface CreatedBooking {
 export async function createBooking(db: Db, actor: Actor, input: CreateBookingInput): Promise<CreatedBooking> {
   return inTransaction(db, async (tx) => {
     const schedule = scheduleFrom(input)
-    const editor = await requireBookableEditor(tx, input.editorId)
+    // The legacy path: a directory profile was posted. Its details are
+    // snapshotted onto the booking below; the profile itself is optional now.
+    const editor = input.editorId ? await requireBookableEditor(tx, input.editorId) : null
     const kit = await requireKit(tx, input.kitId)
-    const engineer = await requireEngineer(tx, input.engineerId)
+    const engineer = await engineerFor(tx, actor, input.engineerId)
+    const requester = requesterSnapshot(input, editor)
+    if (!requester.requesterName) throw new DomainError('validation', 'Enter the name of the person the kit is for.', { requesterName: 'Enter the name of the person the kit is for.' })
     const reserve = input.intent === 'reserve'
     if (reserve) await assertReservable(tx, kit.id, schedule)
 
@@ -250,8 +413,9 @@ export async function createBooking(db: Db, actor: Actor, input: CreateBookingIn
         data: {
           bookingNumber,
           kitId: kit.id,
-          editorId: editor.id,
-          engineerId: engineer.id,
+          editorId: editor?.id ?? null,
+          engineerId: engineer?.id ?? null,
+          ...requester,
           status,
           bookingStart: schedule.bookingStart,
           bookingEnd: schedule.bookingEnd,
@@ -268,18 +432,29 @@ export async function createBooking(db: Db, actor: Actor, input: CreateBookingIn
       throw translateBookingDbError(error) ?? error
     }
 
+    // The checklist is the booking's own from the start, so it can be prepared
+    // before the handover.
+    const checklist = await copyChecklistOntoBooking(tx, booking.id, kit.defaultChecklistTemplateId)
+
     await recordAudit(tx, {
       action: AuditAction.BOOKING_CREATED,
       entityType: 'Booking',
       entityId: booking.id,
       ...actorFields(actor),
-      summary: `${bookingNumber} created as ${STATUS_LABEL[status]} for ${editor.fullName} on kit ${kit.kitCode}`,
+      summary: `${bookingNumber} created as ${STATUS_LABEL[status]} for ${requester.requesterName} on kit ${kit.kitCode}, prepared by ${actor.name}`,
       newValue: {
         bookingNumber,
         status,
-        editor: editor.fullName,
+        requester: requester.requesterName,
+        requesterStaffId: requester.requesterStaffId,
+        requesterMobile: requester.requesterMobile,
+        projectName: requester.projectName,
+        workOrder: requester.workOrder,
+        editorProfile: editor?.id ?? null,
         kit: kit.kitCode,
-        engineer: engineer.fullName,
+        engineer: engineer?.fullName ?? null,
+        preparedBy: actor.name,
+        checklistItems: checklist.count,
         bookingStart: schedule.bookingStart.toISOString(),
         bookingEnd: schedule.bookingEnd.toISOString(),
         collectionDate: schedule.collectionDate?.toISOString() ?? null,
@@ -317,7 +492,7 @@ export async function reserveBooking(db: Db, actor: Actor, id: string): Promise<
   await inTransaction(db, async (tx) => {
     const context = await requireLifecycle(tx, id)
     assertTransition(context, BookingStatus.RESERVED)
-    await requireBookableEditor(tx, context.editorId)
+    if (context.editorId) await requireBookableEditor(tx, context.editorId)
     await requireKit(tx, context.kitId)
     await assertReservable(tx, context.kitId, context, id)
     try {
@@ -344,7 +519,12 @@ export async function markReadyForHandover(db: Db, actor: Actor, id: string): Pr
   await inTransaction(db, async (tx) => {
     const context = await requireLifecycle(tx, id)
     assertTransition(context, BookingStatus.READY_FOR_HANDOVER)
-    await requireBookableEditor(tx, context.editorId)
+    if (context.editorId) await requireBookableEditor(tx, context.editorId)
+    // A booking made before the checklist moved here has no items yet; give it
+    // the kit's template now, so the gate below has something to check.
+    const kit = await tx.kit.findUniqueOrThrow({ where: { id: context.kitId }, select: { defaultChecklistTemplateId: true } })
+    await copyChecklistOntoBooking(tx, id, kit.defaultChecklistTemplateId)
+    await assertChecklistPrepared(tx, id, context.bookingNumber)
     await assertReservable(tx, context.kitId, context, id)
     await tx.booking.update({ where: { id }, data: { status: BookingStatus.READY_FOR_HANDOVER, updatedById: actor.id } })
     await setKitAside(tx, actor, context.kitId, context.bookingNumber, true)
@@ -416,12 +596,20 @@ export async function updateBooking(db: Db, actor: Actor, id: string, input: Upd
     if (scope === 'none') throw new DomainError('lifecycle', `${context.bookingNumber} is ${STATUS_LABEL[context.status].toLowerCase()} and cannot be edited.`)
 
     const schedule = scheduleFrom(input)
-    const engineer = await requireEngineer(tx, input.engineerId)
+    // An explicit engineer profile may still be posted; otherwise the one on record stays.
+    const engineer = input.engineerId ? await requireEngineer(tx, input.engineerId) : null
+    const editor = input.editorId && input.editorId !== context.editorId ? await requireBookableEditor(tx, input.editorId) : null
+    const requester = requesterSnapshot(input, editor)
 
     const next = {
-      editorId: input.editorId,
+      editorId: input.editorId ?? context.editorId,
       kitId: input.kitId,
-      engineerId: engineer.id,
+      engineerId: engineer?.id ?? context.engineerId,
+      requesterName: requester.requesterName ?? context.requesterName,
+      requesterStaffId: requester.requesterStaffId,
+      requesterMobile: requester.requesterMobile ?? context.requesterMobile,
+      projectName: requester.projectName ?? context.projectName,
+      workOrder: requester.workOrder ?? context.workOrder,
       bookingStart: schedule.bookingStart,
       bookingEnd: schedule.bookingEnd,
       collectionDate: schedule.collectionDate,
@@ -433,13 +621,15 @@ export async function updateBooking(db: Db, actor: Actor, id: string, input: Upd
     const changed = (Object.keys(next) as Array<keyof typeof next>).filter((field) => !same(next[field], context[field]))
     if (changed.length === 0) return { id, changed: [] }
 
-    const structural = changed.filter((field) => field !== 'engineerId' && field !== 'purpose' && field !== 'notes')
+    // Who, what and when are structural; the requester's details, the engineer,
+    // the purpose and the notes may change while the kit is set aside.
+    const DETAIL_FIELDS: ReadonlyArray<keyof typeof next> = ['engineerId', 'purpose', 'notes', 'requesterName', 'requesterStaffId', 'requesterMobile', 'projectName', 'workOrder']
+    const structural = changed.filter((field) => !DETAIL_FIELDS.includes(field))
     if (scope === 'restricted' && structural.length > 0) {
-      const message = `${context.bookingNumber} is ready for handover; only the engineer, purpose and notes can change now. Revert it to reserved to change the ${structural.join(', ')}.`
+      const message = `${context.bookingNumber} is ready for handover; only the requester's details, the engineer, purpose and notes can change now. Revert it to reserved to change the ${structural.join(', ')}.`
       throw new DomainError('lifecycle', message, Object.fromEntries(structural.map((field) => [field, message])))
     }
 
-    const editor = changed.includes('editorId') ? await requireBookableEditor(tx, input.editorId) : null
     const kit = changed.includes('kitId') ? await requireKit(tx, input.kitId) : null
     if (isHoldingStatus(context.status) && (changed.includes('kitId') || changed.includes('bookingStart') || changed.includes('bookingEnd'))) {
       await assertReservable(tx, input.kitId, schedule, id)
@@ -454,6 +644,16 @@ export async function updateBooking(db: Db, actor: Actor, id: string, input: Upd
       throw translateBookingDbError(error) ?? error
     }
 
+    // A new kit means a new checklist - unless answers were already given, in
+    // which case the prepared checklist is kept rather than thrown away.
+    if (kit) {
+      const answered = await tx.bookingChecklistItem.count({ where: { bookingId: id, preparedStatus: { not: null } } })
+      if (answered === 0) {
+        await tx.bookingChecklistItem.deleteMany({ where: { bookingId: id } })
+        await copyChecklistOntoBooking(tx, id, kit.defaultChecklistTemplateId)
+      }
+    }
+
     const previousValue: Record<string, string | null> = {}
     const newValue: Record<string, string | null> = {}
     for (const field of changed) {
@@ -463,8 +663,10 @@ export async function updateBooking(db: Db, actor: Actor, id: string, input: Upd
       newValue[field] = after instanceof Date ? after.toISOString() : after
     }
     const parts: string[] = []
-    if (changed.includes('engineerId')) parts.push(`engineer assigned: ${engineer.fullName}`)
-    if (editor) parts.push(`editor changed to ${editor.fullName}`)
+    if (changed.includes('engineerId')) parts.push(`engineer assigned: ${engineer?.fullName ?? 'none'}`)
+    if (editor) parts.push(`requester changed to ${editor.fullName}`)
+    else if (changed.includes('requesterName')) parts.push(`requester changed to ${next.requesterName}`)
+    if (changed.some((field) => ['requesterStaffId', 'requesterMobile', 'projectName', 'workOrder'].includes(field))) parts.push("requester's details updated")
     if (kit) parts.push(`kit changed to ${kit.kitCode}`)
     const scheduleFields = changed.filter((field) => ['bookingStart', 'bookingEnd', 'collectionDate', 'expectedReturnDate'].includes(field))
     if (scheduleFields.length > 0) parts.push('schedule changed')
@@ -475,10 +677,10 @@ export async function updateBooking(db: Db, actor: Actor, id: string, input: Upd
       entityType: 'Booking',
       entityId: id,
       ...actorFields(actor),
-      summary: `${context.bookingNumber} ${parts.join('; ')}`,
+      summary: `${context.bookingNumber} ${parts.join('; ')}. Reason: ${input.reason}`,
       previousValue,
       newValue,
-      metadata: { changed },
+      metadata: { changed, reason: input.reason },
     })
 
     return { id, changed }
@@ -562,13 +764,19 @@ export interface BookingWorkspace {
   photos: PhotoMeta[]
   /** Frozen documents that can be printed for this booking (Phase 12). */
   documents: DocumentKind[]
+  /** The booking's own checklist and where its preparation stands. */
+  checklist: ChecklistPreparation
+  /** The actor may answer the pre-handover checklist right now. */
+  canPrepareChecklist: boolean
+  /** The kit is out and the actor may open the return: the "Return Kit" button. */
+  canReturnKit: boolean
 }
 
 export async function loadBookingWorkspace(db: Db, actor: Actor, id: string, now: Date = new Date()): Promise<BookingWorkspace | null> {
   const booking = await getBookingDetailForActor(db, actor, id)
   if (!booking) return null
 
-  const [facts, kit, activity, handover, returnInspection, photos, documents] = await Promise.all([
+  const [facts, kit, activity, handover, returnInspection, photos, documents, checklistItems] = await Promise.all([
     getKitAvailabilityFacts(db, booking.kit.id),
     getKitDetail(db, booking.kit.id, { includeIssues: false }),
     getBookingActivity(db, id),
@@ -576,7 +784,9 @@ export async function loadBookingWorkspace(db: Db, actor: Actor, id: string, now
     getReturnSummary(db, id),
     getBookingPhotos(db, id),
     availableDocuments(db, id),
+    getBookingChecklistItems(db, id),
   ])
+  const checklist = checklistPreparation(checklistItems)
 
   const manage = can(actor, 'booking.update')
   const scope = editScopeFor(booking.status)
@@ -610,6 +820,9 @@ export async function loadBookingWorkspace(db: Db, actor: Actor, id: string, now
     returnInspection,
     photos,
     documents,
+    checklist,
+    canPrepareChecklist: manage && PREPARABLE_STATUSES.includes(booking.status) && !handover,
+    canReturnKit: can(actor, 'return.perform') && canStartReturn(booking.status) && handover?.status === 'COMPLETED',
   }
 }
 

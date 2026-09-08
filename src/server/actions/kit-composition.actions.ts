@@ -36,9 +36,12 @@ const addKitAssetAction = action({
   permission: 'kit.manage',
   schema: kitMemberInputSchema.extend(kitId.shape),
   async handler({ actor, input }) {
-    const { kitId, ...rest } = input
+    const { kitId, pick, ...rest } = input
     await addKitAsset(prisma, actor, kitId, rest)
-    redirect(`/kits/${kitId}?tab=equipment`)
+    // Back to the open picker, same search, so the next item goes straight in.
+    const query = new URLSearchParams({ tab: 'equipment', add: '1' })
+    if (pick) query.set('pick', pick)
+    redirect(`/kits/${kitId}?${query.toString()}`)
   },
 })
 

@@ -126,7 +126,7 @@ export function EquipmentPanel({
                 {membersBlocker}
               </p>
             ) : !pickerOpen ? (
-              <Link href={kitHref(kit.id, 'equipment', { add: '1' })} className={buttonVariants({ variant: 'secondary', size: 'sm' })}>
+              <Link href={kitHref(kit.id, 'equipment', { add: '1' })} className={buttonVariants({ variant: 'primary', size: 'sm' })}>
                 <Plus aria-hidden className="h-4 w-4" />
                 Add equipment
               </Link>

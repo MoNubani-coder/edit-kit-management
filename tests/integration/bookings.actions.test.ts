@@ -206,12 +206,26 @@ describe('booking mutations', () => {
     expect(overlap).toMatchObject({ ok: false, error: 'rejected', message: expect.stringContaining('already booked') })
   })
 
-  it('lets an ENGINEER edit the notes, audited', async () => {
+  it('lets an ENGINEER edit the notes only with a reason, which the audit trail keeps', async () => {
     expect(createdBookingId).not.toBeNull()
     currentSession = sessionFor(engineer)
-    await expect(updateBookingFormAction(null, form({ ...fields(), id: createdBookingId!, notes: 'Charge the laptop' }))).rejects.toMatchObject({ digest: expect.stringContaining('NEXT_REDIRECT') })
+
+    // No reason, no edit: the form is sent back, and nothing is written.
+    const refused = await updateBookingFormAction(null, form({ ...fields(), id: createdBookingId!, notes: 'Charge the laptop' }))
+    expect(refused).toMatchObject({ ok: false, error: 'validation' })
+    if (refused && !refused.ok) expect(refused.fieldErrors).toHaveProperty('reason')
+    expect((await tx.booking.findUniqueOrThrow({ where: { id: createdBookingId! } })).notes).not.toBe('Charge the laptop')
+    expect(await tx.auditLog.count({ where: { entityType: 'Booking', entityId: createdBookingId!, action: 'BOOKING_UPDATED' } })).toBe(0)
+
+    const reason = 'Editor asked for the laptop to arrive charged'
+    await expect(updateBookingFormAction(null, form({ ...fields(), id: createdBookingId!, notes: 'Charge the laptop', reason }))).rejects.toMatchObject({ digest: expect.stringContaining('NEXT_REDIRECT') })
     expect((await tx.booking.findUniqueOrThrow({ where: { id: createdBookingId! } })).notes).toBe('Charge the laptop')
-    expect(await tx.auditLog.count({ where: { entityType: 'Booking', entityId: createdBookingId!, action: 'BOOKING_UPDATED' } })).toBe(1)
+
+    // The reason is in the summary the activity tab shows and in the structured metadata, never as raw JSON on a page.
+    const entries = await tx.auditLog.findMany({ where: { entityType: 'Booking', entityId: createdBookingId!, action: 'BOOKING_UPDATED' } })
+    expect(entries).toHaveLength(1)
+    expect(entries[0].summary).toContain(`Reason: ${reason}`)
+    expect(entries[0].metadata).toMatchObject({ reason })
   })
 
   it('shows an EDITOR only their own booking through the scoped loaders', async () => {

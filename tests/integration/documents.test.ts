@@ -11,7 +11,8 @@ import { env } from '@/lib/env'
 import type { Actor } from '@/server/auth/session'
 import type { Db } from '@/server/db/prisma'
 
-import { actorFor, createTestUser, testDb, type TestUser } from '../helpers/db'
+import { actorFor, createTestUser, testDb, type TestUser, } from '../helpers/db'
+import { prepareChecklistFor } from '../helpers/checklist'
 
 /**
  * Handover and return documents (AD-6).
@@ -206,6 +207,7 @@ beforeAll(async () => {
   bookingNumber = booking.bookingNumber
 
   // A complete handover, then a complete return with one damaged item.
+  await prepareChecklistFor(tx, adminActor, booking.id)
   await markReadyForHandover(tx, adminActor, booking.id)
   await startHandover(tx, engineerActor, booking.id)
   const handover = (await getLiveHandover(tx, booking.id))!
@@ -281,7 +283,9 @@ describe('the frozen document', () => {
     expect(document.equipment[0]).toMatchObject({ name: 'Original asset name', serialNumber: `SN-ORIGINAL-${tag}`, status: 'INCLUDED' })
     expect(document.equipment[0].accessories[0]).toMatchObject({ label: 'Power adapter', status: 'INCLUDED' })
     expect(document.checklist.length).toBeGreaterThan(0)
-    expect(document.software[0]).toMatchObject({ status: 'INSTALLED', installedVersion: '2050.1' })
+    // Software is no longer checked at handover, so a new document carries none;
+    // documents frozen before the change keep whatever they snapshotted.
+    expect(document.software).toHaveLength(0)
     expect(document.signatures).toHaveLength(2)
     expect(document.signatures.map((signature) => signature.type).sort()).toEqual(['HANDOVER_EDITOR', 'HANDOVER_ENGINEER'])
     expect(document.generalNotes).toBe('Packed and checked')
@@ -361,9 +365,9 @@ describe('the PDF', () => {
       expect(Buffer.from(pdf.bytes.slice(0, 5)).toString()).toBe('%PDF-')
       expect(pdf.bytes.byteLength).toBeGreaterThan(1000)
     }
-    // The handover carries two signature images, the return one, so its file
-    // is the larger of the two.
-    expect(handoverPdf.bytes.byteLength).toBeGreaterThan(returnPdf.bytes.byteLength)
+    // The handover carries two signatures, the return one.
+    expect(handover.document.signatures).toHaveLength(2)
+    expect(returned.document.signatures).toHaveLength(1)
     expect(returnPdf.fileName).toBe(`${bookingNumber}-return.pdf`)
 
     // A missing image must not cost the document. Take the files away and it

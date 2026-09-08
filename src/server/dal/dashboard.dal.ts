@@ -104,6 +104,7 @@ const bookingRowSelect = {
   expectedReturnDate: true,
   actualReturnDate: true,
   kit: { select: { kitCode: true, name: true } },
+  requesterName: true,
   editor: { select: { fullName: true } },
 } satisfies Prisma.BookingSelect
 
@@ -114,7 +115,7 @@ function toBookingRow(record: BookingRecord): DashboardBookingRow {
     id: record.id,
     bookingNumber: record.bookingNumber,
     status: record.status,
-    editorName: record.editor.fullName,
+    editorName: record.requesterName ?? record.editor?.fullName ?? 'Unnamed requester',
     kitCode: record.kit.kitCode,
     kitName: record.kit.name,
     bookingStart: record.bookingStart,

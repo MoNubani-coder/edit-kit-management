@@ -4,6 +4,7 @@ import { AuditAction, UserRole } from '@prisma/client'
 import { describe, expect, it, vi } from 'vitest'
 
 import { AUDIT_ACTION_LABELS, AUDIT_ACTIONS, AUDIT_DEFAULT_PAGE_SIZE, AUDIT_ENTITY_TYPES, AUDIT_GROUP_ACTIONS, auditLogHref, type AuditListParams, parseAuditListParams } from '@/lib/validation/audit'
+import { PAGE_SIZE_MAX_DENSE, PAGE_SIZE_MIN } from '@/lib/pagination'
 import { auditLogSpan, listAuditActors, listAuditLogPage } from '@/server/dal/audit.dal'
 import type { Db } from '@/server/db/prisma'
 
@@ -406,12 +407,18 @@ describe('sorting and paging', () => {
       expect(first.rows).toHaveLength(6)
       expect(first.pageCount).toBe(1)
 
-      // The floor is 10, so a smaller page size is not honoured; page two of a
-      // six-row result is therefore empty, and says so honestly.
+      // A page past the end lands on the last page that exists rather than on an
+      // empty one with a nonsense range (AD-32).
       const second = await listAuditLogPage(tx, params({ q: written.marker, pageSize: 10, page: 2 }), TZ)
       expect(second.total).toBe(6)
-      expect(second.rows).toEqual([])
-      expect(second.page).toBe(2)
+      expect(second.page).toBe(1)
+      expect(second.rows).toHaveLength(6)
+
+      // Two real pages still page, and the second holds the remainder.
+      const small = await listAuditLogPage(tx, params({ q: written.marker, pageSize: 5, page: 2 }), TZ)
+      expect(small.pageCount).toBe(2)
+      expect(small.page).toBe(2)
+      expect(small.rows).toHaveLength(1)
     })
   })
 })
@@ -476,7 +483,10 @@ describe('labels and parameters', () => {
     expect(parsed.sort).toBe('createdAt')
     expect(parsed.dir).toBe('desc')
     expect(parsed.page).toBe(1)
-    expect(parsed.pageSize).toBe(AUDIT_DEFAULT_PAGE_SIZE)
+    // Clamped to this table's ceiling, not reset to the default (AD-32).
+    expect(parsed.pageSize).toBe(PAGE_SIZE_MAX_DENSE)
+    expect(parseAuditListParams({ pageSize: '2' }).pageSize).toBe(PAGE_SIZE_MIN)
+    expect(parseAuditListParams({}).pageSize).toBe(AUDIT_DEFAULT_PAGE_SIZE)
   })
 
   it('keeps a malformed date out of the query', () => {

@@ -51,7 +51,7 @@ export function KitPicker({
   selectHref: (kitId: string) => string
   timeZone: string
   canChange?: boolean
-  /** False until the editor has been chosen. */
+  /** False while an earlier step is incomplete. Always true on the booking form now that the kit comes first. */
   enabled?: boolean
 }) {
   return (
@@ -59,7 +59,7 @@ export function KitPicker({
       <header className="flex items-center justify-between gap-4 border-b border-line bg-panel-header px-5 py-3">
         <div>
           <h2 className="font-display text-[15px] font-semibold text-foreground">
-            <span className="mr-2 inline-flex h-6 w-6 items-center justify-center rounded-md bg-accent-soft font-mono text-xs text-accent-foreground">2</span>
+            <span className="mr-2 inline-flex h-6 w-6 items-center justify-center rounded-md bg-accent-soft font-mono text-xs text-accent-foreground">1</span>
             Kit
           </h2>
           <p className="mt-0.5 text-xs text-muted">Readiness comes from the kit’s equipment (Phase 5 rule); the free window is checked against other live bookings when you reserve.</p>
@@ -72,7 +72,7 @@ export function KitPicker({
       </header>
 
       {!enabled ? (
-        <p className="px-5 py-4 text-sm text-muted">Choose the editor first.</p>
+        <p className="px-5 py-4 text-sm text-muted">Complete the step above first.</p>
       ) : selected ? (
         <div className="space-y-3 px-5 py-4">
           <div className="flex flex-wrap items-center gap-3">

@@ -24,6 +24,7 @@ import { getKitAvailabilityFacts } from '@/server/dal/kits.dal'
 import { getHandoverForReturn, getLiveReturn, getReturnSummary, type HandoverRecord, type ReturnInspection, type ReturnSummary } from '@/server/dal/return.dal'
 import type { Db } from '@/server/db/prisma'
 import { recordAudit } from '@/server/services/audit.service'
+import { requesterOf } from '@/lib/booking-requester'
 import { DomainError, uniqueViolationField } from '@/server/services/errors'
 import { evaluateKitReadinessForBooking, type KitAvailability } from '@/server/services/kits.service'
 import { nextNumber } from '@/server/services/numbering.service'
@@ -437,6 +438,9 @@ export async function saveReturnChecklist(db: Db, actor: Actor, bookingId: strin
 export interface SignatureContext {
   ipAddress?: string | null
   userAgent?: string | null
+  /** The returning person's typed identity, for the EDITOR role only. */
+  recipientName?: string | null
+  recipientMobile?: string | null
 }
 
 const RETURN_SIGNATURE_TYPE: Record<SignerRoleValue, SignatureType> = {
@@ -473,6 +477,16 @@ export async function captureReturnSignature(
   const inspection = await requireOpenReturn(db, bookingId)
   const engineerProfile = role === 'ENGINEER' ? await db.engineerProfile.findFirst({ where: { userId: actor.id, deletedAt: null }, select: { id: true, staffId: true } }) : null
 
+  // Whoever hands the kit back may sign too, with a typed name and mobile that
+  // default to the booking's own requester record. The engineer's identity is
+  // the actor's and is never taken from the form.
+  const requester = requesterOf(booking)
+  const recipientName = role === 'EDITOR' ? context.recipientName?.trim() || requester.name : null
+  const recipientMobile = role === 'EDITOR' ? context.recipientMobile?.trim() || requester.mobile : null
+  if (role === 'EDITOR' && (!recipientName || recipientName.length < 2)) {
+    throw new DomainError('validation', 'Enter the name of the person returning the kit.', { recipientName: 'Enter the name of the person returning the kit.' })
+  }
+
   const type = RETURN_SIGNATURE_TYPE[role]
   const stored = await store.save({ bookingId, type, bytes })
   const hash = sha256(bytes)
@@ -500,10 +514,11 @@ export async function captureReturnSignature(
             type,
             signerRole: role === 'EDITOR' ? SignerRole.EDITOR : SignerRole.ENGINEER,
             signerUserId: role === 'ENGINEER' ? actor.id : null,
-            signerEditorProfileId: role === 'EDITOR' ? booking.editor.id : null,
+            signerEditorProfileId: role === 'EDITOR' ? booking.editor?.id ?? null : null,
             signerEngineerProfileId: role === 'ENGINEER' ? engineerProfile?.id ?? null : null,
-            signerName: role === 'EDITOR' ? booking.editor.fullName : actor.name,
-            signerStaffId: role === 'EDITOR' ? booking.editor.staffId : engineerProfile?.staffId ?? null,
+            signerName: role === 'EDITOR' ? recipientName! : actor.name,
+            signerStaffId: role === 'EDITOR' ? requester.staffId : engineerProfile?.staffId ?? null,
+            signerMobile: role === 'EDITOR' ? recipientMobile : null,
             storageProvider: stored.provider,
             imagePath: stored.path,
             imageMimeType: 'image/png',
@@ -522,7 +537,7 @@ export async function captureReturnSignature(
         entityType: 'Booking',
         entityId: bookingId,
         ...actorFields(actor),
-        summary: role === 'EDITOR' ? `${booking.bookingNumber} return signed by editor ${booking.editor.fullName}` : `${booking.bookingNumber} return signed by engineer ${actor.name}`,
+        summary: role === 'EDITOR' ? `${booking.bookingNumber} return signed by editor ${requesterOf(booking).name}` : `${booking.bookingNumber} return signed by engineer ${actor.name}`,
         metadata: { inspectionId: inspection.id, signatureId: signature.id, type },
       })
       await refreshReturnStatus(tx, inspection.id, bookingId)
@@ -552,7 +567,12 @@ const ISSUE_SEVERITY: Record<'MISSING' | 'DAMAGED', IssueSeverity> = {
   DAMAGED: IssueSeverity.MEDIUM,
 }
 
-export async function completeReturn(db: Db, actor: Actor, bookingId: string): Promise<CompletedReturn> {
+/**
+ * `returnedByName` is the person who physically brought the kit back, typed by
+ * the receiving engineer because that person may have no account. It defaults
+ * to the booking's requester. Who *received* it is the actor, always.
+ */
+export async function completeReturn(db: Db, actor: Actor, bookingId: string, returnedByName?: string): Promise<CompletedReturn> {
   return inTransaction(
     db,
     async (tx) => {
@@ -578,6 +598,8 @@ export async function completeReturn(db: Db, actor: Actor, bookingId: string): P
       const now = new Date()
       const punctuality = returnPunctuality(booking.expectedReturnDate, now)
       const late = minutesLate(booking.expectedReturnDate, now)
+      const requester = requesterOf(booking)
+      const returnedBy = returnedByName?.trim() || requester.name
 
       // 4. The frozen return document, including what it was checked against.
       const documentSnapshot = {
@@ -591,11 +613,21 @@ export async function completeReturn(db: Db, actor: Actor, bookingId: string): P
           purpose: booking.purpose,
         },
         returnedAt: now.toISOString(),
+        returnedBy,
         punctuality,
         minutesLate: late,
-        editor: { name: booking.editor.fullName, staffId: booking.editor.staffId, type: booking.editor.isExternal ? 'EXTERNAL' : 'INTERNAL', contactNumber: booking.editor.contactNumber, company: booking.editor.company, department: booking.editor.department },
+        editor: {
+          name: requester.name,
+          staffId: requester.staffId,
+          type: requester.isExternal === null ? null : requester.isExternal ? 'EXTERNAL' : 'INTERNAL',
+          contactNumber: requester.mobile,
+          company: booking.editor?.company ?? null,
+          department: booking.editor?.department ?? null,
+          projectName: requester.projectName,
+          workOrder: requester.workOrder,
+        },
         kit: { code: booking.kit.kitCode, name: booking.kit.name, barcode: booking.kit.admBarcode, suitcaseStatus: inspection.suitcaseStatus },
-        engineer: { assigned: booking.engineer.fullName, handedOverBy: handover.completedByName, returnReceivedBy: actor.name },
+        engineer: { assigned: booking.engineer?.fullName ?? null, handedOverBy: handover.completedByName, returnReceivedBy: actor.name, preparedBy: booking.createdBy.name },
         handover: { inspectionId: handover.inspectionId, completedAt: handover.completedAt?.toISOString() ?? null, lineCount: handover.lines.length },
         equipment: inspection.lines.map((line) => ({
           assetCode: line.assetCodeSnapshot,
@@ -624,14 +656,14 @@ export async function completeReturn(db: Db, actor: Actor, bookingId: string): P
         generalNotes: inspection.generalNotes,
         signatures: [
           { type: 'RETURN_ENGINEER', signerName: engineerSignature.signerName, signedAt: engineerSignature.signedAt.toISOString(), imageHash: engineerSignature.imageHash },
-          ...(editorSignature ? [{ type: 'RETURN_EDITOR', signerName: editorSignature.signerName, signedAt: editorSignature.signedAt.toISOString(), imageHash: editorSignature.imageHash }] : []),
+          ...(editorSignature ? [{ type: 'RETURN_EDITOR', signerName: editorSignature.signerName, signerMobile: editorSignature.signerMobile ?? null, signedAt: editorSignature.signedAt.toISOString(), imageHash: editorSignature.imageHash }] : []),
         ],
       }
 
       // 5. Freeze the return document (the trigger makes it immutable from here).
       await tx.inspection.update({
         where: { id: inspection.id },
-        data: { status: InspectionStatus.COMPLETED, completedAt: now, completedById: actor.id, lockedAt: now, documentSnapshot: documentSnapshot as Prisma.InputJsonValue },
+        data: { status: InspectionStatus.COMPLETED, completedAt: now, completedById: actor.id, lockedAt: now, returnedByName: returnedBy, documentSnapshot: documentSnapshot as Prisma.InputJsonValue },
       })
 
       // 6. The booking: returned now, by the server clock. Collection and
@@ -703,7 +735,7 @@ export async function completeReturn(db: Db, actor: Actor, bookingId: string): P
             severity: ISSUE_SEVERITY[problem.kind],
             title: `${problem.assetCode} ${problem.kind === 'MISSING' ? 'not returned' : 'returned damaged'}`,
             description: [
-              `${problem.assetCode} ${problem.name} was ${CONDITION_WORD[problem.kind]} at the return of ${booking.bookingNumber} by ${booking.editor.fullName}.`,
+              `${problem.assetCode} ${problem.name} was ${CONDITION_WORD[problem.kind]} at the return of ${booking.bookingNumber} by ${requesterOf(booking).name}.`,
               problem.notes ? `Engineer's note: ${problem.notes}` : null,
               inspection.generalNotes ? `Return notes: ${inspection.generalNotes}` : null,
             ]
@@ -778,7 +810,7 @@ export async function completeReturn(db: Db, actor: Actor, bookingId: string): P
         entityType: 'Booking',
         entityId: bookingId,
         ...actorFields(actor),
-        summary: `${booking.bookingNumber} returned by ${booking.editor.fullName}, received by ${actor.name}: ${returned.length} of ${inspection.lines.filter((line) => line.wasHandedOver).length} back${problems.length > 0 ? `, ${problems.length} with problems` : ''} (${punctuality === 'late' ? `${late} minutes late` : punctuality === 'early' ? 'early' : 'on time'})`,
+        summary: `${booking.bookingNumber} returned by ${requesterOf(booking).name}, received by ${actor.name}: ${returned.length} of ${inspection.lines.filter((line) => line.wasHandedOver).length} back${problems.length > 0 ? `, ${problems.length} with problems` : ''} (${punctuality === 'late' ? `${late} minutes late` : punctuality === 'early' ? 'early' : 'on time'})`,
         newValue: {
           returnedAt: now.toISOString(),
           expectedReturnDate: booking.expectedReturnDate.toISOString(),

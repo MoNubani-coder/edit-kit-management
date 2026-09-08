@@ -13,6 +13,7 @@ import { addKitAsset, createKit, evaluateKitAvailability, kitOperations, removeK
 import { kitScanPath, qrSvg } from '@/server/services/qr.service'
 
 import { actorFor, createTestUser, testDb, type TestUser, withRollback } from '../helpers/db'
+import { prepareChecklistFor } from '../helpers/checklist'
 
 /**
  * The kit label: what the QR carries, what a scan resolves to, and what the
@@ -276,6 +277,7 @@ describe('what the kit page offers after a scan', () => {
         expect(operations[0].href).toBe(`/bookings/${booking.id}`)
       }
 
+      await prepareChecklistFor(tx, fx.actor, booking.id)
       await markReadyForHandover(tx, fx.actor, booking.id)
 
       {
@@ -324,6 +326,7 @@ describe('what the kit page offers after a scan', () => {
         notes: undefined,
         intent: 'reserve',
       })
+      await prepareChecklistFor(tx, fx.actor, booking.id)
       await markReadyForHandover(tx, fx.actor, booking.id)
       // Out, without walking the whole handover: the operations rule reads the
       // booking's status, and this is the state it would be in.

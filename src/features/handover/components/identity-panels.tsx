@@ -6,6 +6,7 @@ import { BookingStatusBadge, KitStatusBadge } from '@/components/common/status-b
 import { Badge } from '@/components/ui/badge'
 import { formatDate, formatTime } from '@/lib/datetime'
 import { SUITCASE_STATUS_LABELS } from '@/lib/validation/kits'
+import { requesterOf } from '@/lib/booking-requester'
 import type { HandoverBooking } from '@/server/dal/handover.dal'
 
 function Panel({ title, icon: Icon, action, children }: { title: string; icon: typeof Boxes; action?: ReactNode; children: ReactNode }) {
@@ -37,6 +38,7 @@ const Empty = () => <span className="text-subtle">—</span>
 /** Who, what and when - the identities the engineer checks out loud before anything is verified. */
 export function IdentityPanels({ booking, timeZone, canReadEditor, canReadKit }: { booking: HandoverBooking; timeZone: string; canReadEditor: boolean; canReadKit: boolean }) {
   const editor = booking.editor
+  const requester = requesterOf(booking)
   const kit = booking.kit
   return (
     <div className="grid gap-6 xl:grid-cols-3">
@@ -53,28 +55,34 @@ export function IdentityPanels({ booking, timeZone, canReadEditor, canReadKit }:
         <Field label="Expected return">
           {formatDate(booking.expectedReturnDate, timeZone)} {formatTime(booking.expectedReturnDate, timeZone)}
         </Field>
-        <Field label="Assigned engineer">
-          {booking.engineer.fullName}
-          {booking.engineer.staffId ? <span className="ml-2 font-mono text-xs text-muted">{booking.engineer.staffId}</span> : null}
-        </Field>
+        <Field label="Prepared by">{booking.createdBy.name}</Field>
+        {booking.engineer ? (
+          <Field label="Assigned engineer">
+            {booking.engineer.fullName}
+            {booking.engineer.staffId ? <span className="ml-2 font-mono text-xs text-muted">{booking.engineer.staffId}</span> : null}
+          </Field>
+        ) : null}
         {booking.purpose ? <Field label="Purpose">{booking.purpose}</Field> : null}
       </Panel>
 
-      <Panel title="Editor" icon={UserRound} action={canReadEditor ? <Link href={`/editors/${editor.id}`} className="text-sm font-medium text-accent-foreground hover:underline">Open</Link> : null}>
+      <Panel title="Requester" icon={UserRound} action={canReadEditor && editor ? <Link href={`/editors/${editor.id}`} className="text-sm font-medium text-accent-foreground hover:underline">Directory entry</Link> : null}>
         <Field label="Name">
           <span className="flex flex-wrap items-center gap-2">
-            <span className="text-base font-semibold">{editor.fullName}</span>
-            <Badge tone={editor.isExternal ? 'neutral' : 'blue'}>{editor.isExternal ? 'External' : 'Internal'}</Badge>
-            {!editor.isActive ? <Badge tone="amber">Inactive</Badge> : null}
+            <span className="text-base font-semibold">{requester.name}</span>
+            {requester.isExternal !== null ? <Badge tone={requester.isExternal ? 'neutral' : 'blue'}>{requester.isExternal ? 'External' : 'Internal'}</Badge> : null}
+            {editor && !editor.isActive ? <Badge tone="amber">Inactive</Badge> : null}
           </span>
         </Field>
         <Field label="Staff ID" mono>
-          {editor.staffId ?? <Empty />}
+          {requester.staffId ?? <Empty />}
         </Field>
-        <Field label="Mobile / contact">{editor.contactNumber ?? <Empty />}</Field>
-        <Field label="Email">{editor.email ?? <Empty />}</Field>
-        <Field label={editor.isExternal ? 'Company' : 'Department'}>{(editor.isExternal ? editor.company : editor.department) ?? <Empty />}</Field>
-        {editor.isExternal ? <p className="text-xs text-muted">Signs in person on this device. No application account is involved.</p> : null}
+        <Field label="Mobile">{requester.mobile ?? <Empty />}</Field>
+        <Field label="Project">{requester.projectName ?? <Empty />}</Field>
+        <Field label="Work order" mono>
+          {requester.workOrder ?? <Empty />}
+        </Field>
+        {editor ? <Field label={editor.isExternal ? 'Company' : 'Department'}>{(editor.isExternal ? editor.company : editor.department) ?? <Empty />}</Field> : null}
+        <p className="text-xs text-muted">Signs in person on this device. No application account is involved.</p>
       </Panel>
 
       <Panel title="Kit" icon={Boxes} action={canReadKit ? <Link href={`/kits/${kit.id}`} className="text-sm font-medium text-accent-foreground hover:underline">Open</Link> : null}>

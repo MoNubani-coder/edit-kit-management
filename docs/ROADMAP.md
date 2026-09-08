@@ -299,6 +299,42 @@ in the section. Automated (81 tests added: 30 audit log, 42 administration,
 
 ---
 
+## After the roadmap — the approved workflow changes ✅ COMPLETE
+
+A user-directed review of all eighteen areas produced seventeen approved
+changes, applied on 2026-09-08. They reshape the path an engineer walks
+without adding a phase or removing a table: the person a kit is for is typed
+onto the booking instead of looked up in the Editors directory, the checklist
+is answered before the kit is set aside rather than at the counter, software
+gates nothing, an edit needs a reason, and every "who did this" - prepared by,
+handed over by, received by - comes from the authenticated session rather than
+from a form body. A prominent Return Kit button sits on a checked-out booking,
+the person returning the kit is typed in, and pagination follows one rule
+everywhere.
+
+Nothing historical was destroyed: `SoftwareApplication`, `KitSoftware`,
+`SoftwareCheck` and `EditorProfile` keep every row, their routes still render,
+and only their navigation entries are gone. One new migration adds the
+requester and prepared-checklist columns, `Inspection.returnedByName` and
+`Signature.signerMobile`, relaxes `editorId`/`engineerId` to nullable behind a
+CHECK that every booking still names somebody, and re-creates the two
+immutability triggers so the new columns are frozen with the ones beside them.
+No applied migration was edited, and no development data was altered.
+
+The decisions are AD-28 to AD-32 and §24 of ARCHITECTURE.md, including §24.4,
+which states plainly that LDAP is not implemented and lists what an LDAP or
+Entra integration would still need.
+
+**Test:** the whole path in a browser (kit first, typed requester, prepared
+checklist, refused and then accepted readiness, recipient name/mobile and
+signature, Return Kit, received-by, typed returner, both documents), plus 45
+new automated tests: the pagination rule, the requester helper and the booking
+form's schema, twenty-one integration tests over the behaviours the changes
+introduced, and seven database-level checks for the new constraint and the two
+amended immutability triggers.
+
+---
+
 ## Sequencing notes
 
 - **Phases 4–6 are independent** and can run in parallel across developers.

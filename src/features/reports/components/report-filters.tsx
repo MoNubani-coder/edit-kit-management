@@ -6,7 +6,7 @@ import { FormField } from '@/components/ui/form-field'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { cn } from '@/lib/utils/cn'
-import type { ReportQuery } from '@/server/reports/filters'
+import { REPORT_DEFAULT_PAGE_SIZE, type ReportQuery } from '@/server/reports/filters'
 import type { ReportDefinition } from '@/server/reports/types'
 
 /**
@@ -32,6 +32,9 @@ export function ReportFilters({
 
   return (
     <form method="get" action={`/reports/${report.id}`} className="theme-transition rounded-panel border border-line bg-panel px-5 py-4">
+      {/* A new question starts at the first page, but keeps the chosen page size. */}
+      <input type="hidden" name="page" value="1" />
+      {query.pageSize !== REPORT_DEFAULT_PAGE_SIZE ? <input type="hidden" name="pageSize" value={query.pageSize} /> : null}
       <p className="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-subtle">
         <SlidersHorizontal aria-hidden className="h-3.5 w-3.5" />
         Filters

@@ -3,7 +3,7 @@ import Link from 'next/link'
 
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import type { KitListParams } from '@/lib/validation/kits'
+import { KIT_DEFAULT_PAGE_SIZE, type KitListParams } from '@/lib/validation/kits'
 import { cn } from '@/lib/utils/cn'
 
 /**
@@ -17,6 +17,7 @@ export function KitsToolbar({ params, clearHref }: { params: KitListParams; clea
       {params.view !== 'all' ? <input type="hidden" name="view" value={params.view} /> : null}
       {params.sort !== 'kitCode' ? <input type="hidden" name="sort" value={params.sort} /> : null}
       {params.dir !== 'asc' ? <input type="hidden" name="dir" value={params.dir} /> : null}
+      {params.pageSize !== KIT_DEFAULT_PAGE_SIZE ? <input type="hidden" name="pageSize" value={params.pageSize} /> : null}
 
       <div className="relative">
         <Search aria-hidden className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-subtle" />

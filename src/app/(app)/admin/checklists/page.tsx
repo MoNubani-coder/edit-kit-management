@@ -4,6 +4,7 @@ import Link from 'next/link'
 
 import { EmptyState } from '@/components/common/empty-state'
 import { PageHeader } from '@/components/common/page-header'
+import { Pagination } from '@/components/common/pagination'
 import { Alert } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { buttonVariants } from '@/components/ui/button'
@@ -19,9 +20,10 @@ import {
 } from '@/features/admin/components/checklist-forms'
 import { formatDate } from '@/lib/datetime'
 import { env } from '@/lib/env'
+import { pageSchema, pageSizeSchema } from '@/lib/pagination'
 import { CHECKLIST_PHASE_LABELS, type ChecklistPhaseValue, first } from '@/lib/validation/admin'
 import { requirePermissionForPage } from '@/server/auth/page-guards'
-import { getChecklistTemplate, listChecklistTemplates } from '@/server/dal/admin.dal'
+import { getChecklistTemplate, listChecklistTemplatesPage } from '@/server/dal/admin.dal'
 import { prisma } from '@/server/db/prisma'
 
 export const metadata: Metadata = { title: 'Checklist Templates' }
@@ -52,7 +54,20 @@ export default async function AdminChecklistTemplatesPage({ searchParams }: { se
   const editingItem = first(query.item) ?? null
   const addingItem = first(query.add) === 'item'
 
-  const templates = await listChecklistTemplates(prisma, { includeInactive: true })
+  const result = await listChecklistTemplatesPage(prisma, {
+    page: pageSchema.parse(first(query.page)),
+    pageSize: pageSizeSchema().parse(first(query.pageSize)),
+    includeInactive: true,
+  })
+  const templates = result.rows
+  const hrefFor = (page: number) => {
+    const search = new URLSearchParams()
+    if (selected) search.set('template', selected)
+    if (page > 1) search.set('page', String(page))
+    if (result.pageSize !== 25) search.set('pageSize', String(result.pageSize))
+    const text = search.toString()
+    return text ? `/admin/checklists?${text}` : '/admin/checklists'
+  }
   const detail = selected && selected !== 'new' ? await getChecklistTemplate(prisma, selected) : null
 
   const templateFormValues: TemplateFormValues | null =
@@ -178,6 +193,7 @@ export default async function AdminChecklistTemplatesPage({ searchParams }: { se
               </table>
             </div>
           )}
+          <Pagination page={result.page} pageCount={result.pageCount} total={result.total} pageSize={result.pageSize} hrefFor={hrefFor} />
         </div>
 
         {detail ? (

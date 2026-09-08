@@ -31,6 +31,7 @@ import { captureReturnSignature, completeReturn, saveReturnChecklist, saveReturn
 import { memorySignatureStore } from '@/server/storage/signature-store'
 
 import { actorFor, createTestUser, testDb, type TestUser, withRollback } from '../helpers/db'
+import { prepareChecklistFor } from '../helpers/checklist'
 
 /**
  * Issue management against the real database, inside rolled-back transactions.
@@ -147,6 +148,7 @@ async function checkedOut(tx: Db, fx: Fixtures) {
     notes: undefined,
     intent: 'reserve',
   })
+  await prepareChecklistFor(tx, fx.actor, booking.id)
   await markReadyForHandover(tx, fx.actor, booking.id)
   await startHandover(tx, fx.engineer, booking.id)
   const handover = (await getLiveHandover(tx, booking.id))!

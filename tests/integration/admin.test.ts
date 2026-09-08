@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { ChecklistPhase, UserRole, UserStatus } from '@prisma/client'
 import { describe, expect, it } from 'vitest'
 
+import { PAGE_SIZE_MAX, PAGE_SIZE_MIN } from '@/lib/pagination'
 import {
   CHECKLIST_PHASE_LABELS,
   CHECKLIST_PHASES,
@@ -594,7 +595,11 @@ describe('the words and the URLs', () => {
     expect(parsed.sort).toBe('name')
     expect(parsed.dir).toBe('asc')
     expect(parsed.page).toBe(1)
-    expect(parsed.pageSize).toBe(USER_DEFAULT_PAGE_SIZE)
+    // A size out of range is clamped to the nearest bound rather than reset, so a
+    // wide URL still shows something sensible (AD-32).
+    expect(parsed.pageSize).toBe(PAGE_SIZE_MAX)
+    expect(parseUserListParams({ pageSize: '1' }).pageSize).toBe(PAGE_SIZE_MIN)
+    expect(parseUserListParams({}).pageSize).toBe(USER_DEFAULT_PAGE_SIZE)
   })
 
   it('turns the account list parameters back into a URL', () => {

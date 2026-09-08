@@ -96,8 +96,11 @@ export interface ReportDefinition {
 }
 
 /** Helpers shared by the definitions. */
-export function paginate(page: number, pageSize: number, total: number) {
-  return { skip: (page - 1) * pageSize, take: pageSize, pageCount: Math.max(1, Math.ceil(total / pageSize)) }
+/** Skip and take for the page that exists: an out-of-range page lands on the last one. */
+export function paginate(requested: number, pageSize: number, total: number) {
+  const pageCount = Math.max(1, Math.ceil(total / pageSize))
+  const page = Math.min(Math.max(1, requested), pageCount)
+  return { skip: (page - 1) * pageSize, take: pageSize, pageCount, page }
 }
 
 export function plural(count: number, one: string, many = `${one}s`): string {

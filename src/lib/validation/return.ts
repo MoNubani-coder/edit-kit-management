@@ -88,9 +88,18 @@ export const returnSignatureSchema = z.object({
     .min(1, 'Sign before saving.')
     .max(SIGNATURE_MAX_DATA_URL_CHARS, 'The signature image is too large.')
     .regex(/^data:image\/png;base64,[A-Za-z0-9+/=]+$/, 'The signature must be a PNG image.'),
+  /** The person returning the kit, when they sign too. Ignored for the engineer. */
+  recipientName: optionalText(120),
+  recipientMobile: optionalText(40),
 })
 export type ReturnSignatureInput = z.output<typeof returnSignatureSchema>
 
+/**
+ * Completion names the person who physically brought the kit back. It is a
+ * typed field because that person may have no account; who *received* it is
+ * the authenticated engineer and is never posted.
+ */
 export const completeReturnSchema = z.object({
   confirm: z.literal('true', { message: 'Confirm that the kit has been received back.' }),
+  returnedByName: z.string().trim().min(2, 'Enter who returned the kit.').max(120, 'Use at most 120 characters.'),
 })

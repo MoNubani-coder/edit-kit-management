@@ -36,6 +36,13 @@ function booking(overrides: Partial<HandoverBooking> = {}): HandoverBooking {
     purpose: 'Ramadan coverage',
     notes: null,
     checklistTemplateId: null,
+    requesterName: 'Layla Haddad',
+    requesterStaffId: 'ADM-1024',
+    requesterMobile: '+971500000000',
+    projectName: 'Ramadan coverage',
+    workOrder: 'WO-2026-0042',
+    checklistPreparedAt: new Date('2026-02-28T12:00:00.000Z'),
+    createdBy: { id: 'user-1', name: 'Omar Said' },
     editor: {
       id: 'editor-1',
       fullName: 'Layla Haddad',
@@ -60,6 +67,22 @@ function booking(overrides: Partial<HandoverBooking> = {}): HandoverBooking {
     },
     engineer: { id: 'engineer-1', fullName: 'Omar Said', staffId: 'ADM-2048', userId: 'user-1' },
     ...overrides,
+  }
+}
+
+/** The directory profile a legacy booking carries. */
+function profile() {
+  return {
+    id: 'editor-1',
+    fullName: 'Layla Haddad',
+    staffId: 'ADM-1024',
+    isExternal: false,
+    isActive: true,
+    deleted: false,
+    contactNumber: '+971500000000',
+    email: 'layla@example.test',
+    company: null,
+    department: 'News',
   }
 }
 
@@ -225,13 +248,13 @@ describe('bookingHandoverBlockers', () => {
   })
 
   it('refuses a removed editor before an inactive one, and names them', () => {
-    const removed = bookingHandoverBlockers(booking({ editor: { ...booking().editor, deleted: true, isActive: false } }), readiness())
+    const removed = bookingHandoverBlockers(booking({ editor: { ...profile(), deleted: true, isActive: false } }), readiness())
     expect(reasons(removed)).toContain('Layla Haddad has been removed from the editor directory.')
     expect(removed.filter((blocker) => blocker.code === 'editor')).toHaveLength(1)
   })
 
   it('refuses an inactive editor and says what to do about it', () => {
-    const blockers = bookingHandoverBlockers(booking({ editor: { ...booking().editor, isActive: false } }), readiness())
+    const blockers = bookingHandoverBlockers(booking({ editor: { ...profile(), isActive: false } }), readiness())
     expect(reasons(blockers)).toContain('Reactivate the editor or cancel the booking.')
   })
 
@@ -265,7 +288,7 @@ describe('bookingHandoverBlockers', () => {
 
   it('reports every independent problem at once rather than the first', () => {
     const blockers = bookingHandoverBlockers(
-      booking({ status: BookingStatus.RESERVED, editor: { ...booking().editor, isActive: false }, kit: { ...booking().kit, deleted: true } }),
+      booking({ status: BookingStatus.RESERVED, editor: { ...profile(), isActive: false }, kit: { ...booking().kit, deleted: true } }),
       readiness({ memberCount: 0 }),
     )
     expect(codes(blockers)).toEqual(['status', 'editor', 'kit', 'kit'])
@@ -341,14 +364,14 @@ describe('verificationVerdict', () => {
   })
 
   it('counts unanswered required checks in one message and uses the singular correctly', () => {
-    const one = verificationVerdict(handover({ checklist: [{ id: 'c1', label: 'Battery health', description: null, phase: 'HANDOVER', isRequired: true, sortOrder: 0, result: null }] }))
+    const one = verificationVerdict(handover({ checklist: [{ id: 'c1', label: 'Battery health', description: null, phase: 'HANDOVER', isRequired: true, sortOrder: 0, result: null, prepared: null }] }))
     expect(reasons(one.blockers)).toContain('1 required check has not been answered.')
 
     const two = verificationVerdict(
       handover({
         checklist: [
-          { id: 'c1', label: 'Battery health', description: null, phase: 'HANDOVER', isRequired: true, sortOrder: 0, result: null },
-          { id: 'c2', label: 'Ports', description: null, phase: 'BOTH', isRequired: true, sortOrder: 1, result: null },
+          { id: 'c1', label: 'Battery health', description: null, phase: 'HANDOVER', isRequired: true, sortOrder: 0, result: null, prepared: null },
+          { id: 'c2', label: 'Ports', description: null, phase: 'BOTH', isRequired: true, sortOrder: 1, result: null, prepared: null },
         ],
       }),
     )
@@ -359,8 +382,8 @@ describe('verificationVerdict', () => {
     const verdict = verificationVerdict(
       handover({
         checklist: [
-          { id: 'c1', label: 'Battery health', description: null, phase: 'HANDOVER', isRequired: true, sortOrder: 0, result: { status: 'FAIL', notes: null } },
-          { id: 'c2', label: 'Lens cloth', description: null, phase: 'HANDOVER', isRequired: false, sortOrder: 1, result: { status: 'FAIL', notes: null } },
+          { id: 'c1', label: 'Battery health', description: null, phase: 'HANDOVER', isRequired: true, sortOrder: 0, result: { status: 'FAIL', notes: null }, prepared: null },
+          { id: 'c2', label: 'Lens cloth', description: null, phase: 'HANDOVER', isRequired: false, sortOrder: 1, result: { status: 'FAIL', notes: null }, prepared: null },
         ],
       }),
     )
@@ -369,20 +392,22 @@ describe('verificationVerdict', () => {
   })
 
   it('does not require an answer to an optional check', () => {
-    const verdict = verificationVerdict(handover({ checklist: [{ id: 'c1', label: 'Lens cloth', description: null, phase: 'HANDOVER', isRequired: false, sortOrder: 0, result: null }] }))
+    const verdict = verificationVerdict(handover({ checklist: [{ id: 'c1', label: 'Lens cloth', description: null, phase: 'HANDOVER', isRequired: false, sortOrder: 0, result: null, prepared: null }] }))
     expect(verdict.complete).toBe(true)
   })
 
-  it('refuses required software that is not installed and names the version', () => {
+  // Software no longer gates a handover (user-directed review): a gap is noted, named, and not a blocker.
+  it('notes required software that is not installed, naming the version, without blocking', () => {
     const verdict = verificationVerdict(
       handover({
         software: [{ id: 's1', softwareApplicationId: 'app-1', status: 'NOT_INSTALLED', installedVersion: null, notes: null, nameSnapshot: 'DaVinci Resolve', versionSnapshot: '19', vendorSnapshot: 'Blackmagic', isRequired: true, sortOrder: 0 }],
       }),
     )
-    expect(reasons(verdict.blockers)).toContain('DaVinci Resolve 19 is not installed.')
+    expect(verdict.blockers).toEqual([])
+    expect(verdict.warnings).toContain('DaVinci Resolve 19 is not installed; noted, not blocking.')
   })
 
-  it('accepts required software marked not applicable, and warns on an optional gap', () => {
+  it('accepts software marked not applicable, and notes any other gap', () => {
     const verdict = verificationVerdict(
       handover({
         software: [
@@ -392,7 +417,7 @@ describe('verificationVerdict', () => {
       }),
     )
     expect(verdict.blockers).toEqual([])
-    expect(verdict.warnings).toEqual(['After Effects (optional) is license issue.'])
+    expect(verdict.warnings).toEqual(['After Effects is license issue; noted, not blocking.'])
   })
 
   it('refuses completion until both parties have signed, naming whichever is absent', () => {

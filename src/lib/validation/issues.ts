@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { pageSizeSchema } from '@/lib/pagination'
+
 import { formDataToObject } from './assets'
 
 /**
@@ -127,7 +129,7 @@ const listParamsSchema = z.object({
   sort: z.enum(ISSUE_SORT_KEYS).catch('reportedAt'),
   dir: z.enum(['asc', 'desc']).catch('desc'),
   page: z.coerce.number().int().min(1).catch(1),
-  pageSize: z.coerce.number().int().min(5).max(100).catch(ISSUE_DEFAULT_PAGE_SIZE),
+  pageSize: pageSizeSchema(ISSUE_DEFAULT_PAGE_SIZE),
 })
 
 export type IssueListParams = z.output<typeof listParamsSchema>

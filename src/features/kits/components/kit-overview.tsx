@@ -127,14 +127,7 @@ export function KitOverview({ kit, availability, timeZone }: { kit: KitDetail; a
               · {availability.requiredCount} required{optionalCount > 0 ? `, ${optionalCount} optional` : ''}
             </span>
           </Field>
-          <Field label="Software">
-            <Link href={kitHref(kit.id, 'software')} className="text-accent-foreground hover:underline">
-              {kit.software.length} {kit.software.length === 1 ? 'application' : 'applications'}
-            </Link>
-            {kit.software.length > 0 ? (
-              <span className="block text-xs text-muted">{kit.software.map((row) => row.software.name).join(', ')}</span>
-            ) : null}
-          </Field>
+          
           <Field label="Handover checklist">
             <Link href={kitHref(kit.id, 'checklist')} className="text-accent-foreground hover:underline">
               {kit.checklistTemplate ? kit.checklistTemplate.name : 'System default'}

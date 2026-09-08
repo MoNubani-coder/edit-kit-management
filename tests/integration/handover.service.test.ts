@@ -24,6 +24,7 @@ import { addKitAsset, addKitSoftware, createKit } from '@/server/services/kits.s
 import { memorySignatureStore } from '@/server/storage/signature-store'
 
 import { actorFor, createTestUser, testDb, type TestUser, withRollback } from '../helpers/db'
+import { prepareChecklistFor } from '../helpers/checklist'
 
 /**
  * The handover against the real database, inside rolled-back transactions.
@@ -122,7 +123,10 @@ async function scenario(tx: Db, fx: Fixtures, options: { ready?: boolean; intent
     notes: undefined,
     intent: options.intent ?? 'reserve',
   })
-  if (options.ready ?? true) await markReadyForHandover(tx, fx.actor, booking.id)
+  if (options.ready ?? true) {
+    await prepareChecklistFor(tx, fx.actor, booking.id)
+    await markReadyForHandover(tx, fx.actor, booking.id)
+  }
   return { bookingId: booking.id, bookingNumber: booking.bookingNumber, kitId: kit.id, kitCode: kit.kitCode, editorId: editor.id, editorName, assets }
 }
 
@@ -177,11 +181,12 @@ describe('starting a handover', () => {
       expect(inspection.lines[0].accessories).toHaveLength(1)
       expect(inspection.lines[0].accessories[0]).toMatchObject({ labelSnapshot: 'Cable 0', accessoryTypeSnapshot: 'Power Cable', quantityExpected: 1, isRequired: true })
       expect(inspection.lines[2].accessories).toHaveLength(0)
-      expect(inspection.software).toHaveLength(1)
-      expect(inspection.software[0]).toMatchObject({ isRequired: true, status: 'INSTALLED' })
-      // The default template has 12 items, one of them RETURN-only.
+      // Software is no longer checked at handover; the kit's software list stays on the kit.
+      expect(inspection.software).toHaveLength(0)
+      // The default template has 12 items, one of them RETURN-only. The answers
+      // come in from the checklist prepared before the handover started.
       expect(inspection.checklist.length).toBe(11)
-      expect(inspection.checklist.every((item) => item.result === null)).toBe(true)
+      expect(inspection.checklist.every((item) => item.result?.status === 'PASS')).toBe(true)
       expect(await tx.bookingChecklistItem.count({ where: { bookingId: s.bookingId } })).toBe(12)
       expect((await tx.booking.findUniqueOrThrow({ where: { id: s.bookingId } })).checklistTemplateId).not.toBeNull()
 
@@ -238,16 +243,16 @@ describe('starting a handover', () => {
 })
 
 describe('verification and signatures', () => {
-  it('enforces required equipment, checklist answers, software and both signatures before completion', async () => {
+  it('enforces required equipment, the prepared checklist answers and both signatures before completion', async () => {
     await withRollback(async (tx) => {
       const fx = await fixtures(tx)
       const store = memorySignatureStore()
       const s = await scenario(tx, fx)
       await startHandover(tx, fx.engineer, s.bookingId)
 
-      // Nothing recorded yet: everything blocks.
+      // The checklist came in prepared, so only the two signatures stand in the way.
       let verdict = verificationVerdict((await getLiveHandover(tx, s.bookingId))!)
-      expect(verdict.blockers.map((blocker) => blocker.code)).toEqual(expect.arrayContaining(['checklist', 'signature']))
+      expect(verdict.blockers.map((blocker) => blocker.code)).toEqual(['signature', 'signature'])
       await expect(completeHandover(tx, fx.engineer, s.bookingId)).rejects.toMatchObject({ code: 'lifecycle' })
       expect((await tx.booking.findUniqueOrThrow({ where: { id: s.bookingId } })).status).toBe('READY_FOR_HANDOVER')
 
@@ -263,23 +268,20 @@ describe('verification and signatures', () => {
       expect(verdict.blockers.some((blocker) => blocker.code === 'equipment' && blocker.reason.includes(s.assets[0].assetCode))).toBe(true)
       expect(verdict.warnings.some((warning) => warning.includes(s.assets[2].assetCode))).toBe(true)
 
-      // Checklist: unanswered and failed required checks block; an optional failure warns.
+      // Checklist: the answers came in from the preparation before the handover,
+      // so nothing is unanswered - but an amended failure still blocks.
       const required = inspection.checklist.filter((item) => item.isRequired)
-      await saveChecklistVerification(tx, fx.engineer, s.bookingId, {
-        checks: required.slice(1).map((item) => ({ id: item.id, status: 'PASS' as const, notes: undefined })),
-        software: inspection.software.map((check) => ({ id: check.id, status: 'NOT_INSTALLED' as const, installedVersion: undefined, notes: undefined })),
-      })
-      verdict = verificationVerdict((await getLiveHandover(tx, s.bookingId))!)
-      expect(verdict.blockers.some((blocker) => blocker.code === 'checklist' && blocker.reason.includes('1 required check has not been answered'))).toBe(true)
-      expect(verdict.blockers.some((blocker) => blocker.code === 'software')).toBe(true)
+      expect(verdict.blockers.some((blocker) => blocker.code === 'checklist')).toBe(false)
+      // Software is not part of a handover any more: nothing to answer, nothing to block on.
+      expect(inspection.software).toHaveLength(0)
+      expect(verdict.blockers.some((blocker) => blocker.reason.includes('not installed'))).toBe(false)
 
       await saveChecklistVerification(tx, fx.engineer, s.bookingId, {
         checks: [{ id: required[0].id, status: 'FAIL' as const, notes: 'Does not boot' }],
-        software: inspection.software.map((check) => ({ id: check.id, status: 'INSTALLED' as const, installedVersion: undefined, notes: undefined })),
+        software: [],
       })
       verdict = verificationVerdict((await getLiveHandover(tx, s.bookingId))!)
       expect(verdict.blockers.some((blocker) => blocker.reason.includes(`Check "${required[0].label}" failed`))).toBe(true)
-      expect(verdict.blockers.some((blocker) => blocker.code === 'software')).toBe(false)
 
       // Fix everything except the signatures.
       await verifyEverything(tx, fx.engineer, s.bookingId)
@@ -454,6 +456,7 @@ describe('completing the handover', () => {
         notes: undefined,
         intent: 'reserve',
       })
+      await prepareChecklistFor(tx, fx.actor, booking.id)
       await markReadyForHandover(tx, fx.actor, booking.id)
       await startHandover(tx, fx.engineer, booking.id)
       await verifyEverything(tx, fx.engineer, booking.id)
@@ -519,6 +522,7 @@ describe('a kit with no equipment', () => {
         notes: undefined,
         intent: 'reserve',
       })
+      await prepareChecklistFor(tx, fx.actor, booking.id)
       await markReadyForHandover(tx, fx.actor, booking.id)
 
       // The page says why, and offers nothing to start.
@@ -533,7 +537,9 @@ describe('a kit with no equipment', () => {
       // And starting one is refused, so no document, line or number is created.
       await expect(startHandover(tx, fx.engineer, booking.id)).rejects.toThrow(/has no equipment on it/)
       expect(await tx.inspection.count({ where: { bookingId: booking.id } })).toBe(0)
-      expect(await tx.bookingChecklistItem.count({ where: { bookingId: booking.id } })).toBe(0)
+      // The prepared checklist is booking data and stays; nothing of the handover itself exists.
+      expect(await tx.bookingChecklistItem.count({ where: { bookingId: booking.id } })).toBe(12)
+      expect(await tx.checklistResult.count({ where: { checklistItem: { bookingId: booking.id } } })).toBe(0)
 
       // The same rule guards completion, for an inspection that holds no lines.
       const withEquipment = await scenario(tx, fx)

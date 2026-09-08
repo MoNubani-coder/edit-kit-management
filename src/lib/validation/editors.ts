@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { pageSizeSchema } from '@/lib/pagination'
+
 import { formDataToObject } from './assets'
 
 /**
@@ -100,7 +102,7 @@ const listParamsSchema = z.object({
   sort: z.enum(EDITOR_SORT_KEYS).catch('fullName'),
   dir: z.enum(['asc', 'desc']).catch('asc'),
   page: z.coerce.number().int().min(1).catch(1),
-  pageSize: z.coerce.number().int().min(5).max(100).catch(EDITOR_DEFAULT_PAGE_SIZE),
+  pageSize: pageSizeSchema(EDITOR_DEFAULT_PAGE_SIZE),
 })
 
 export type EditorListParams = z.output<typeof listParamsSchema>
