@@ -347,11 +347,12 @@ configuration with nothing invented: `AUTH_LDAP_ENABLED` is `false` until IT
 supplies the values listed in OPERATIONS.md §6. No migration, no change to the
 session architecture, no LDAP traffic after sign-in.
 
-**Test:** 55 new automated tests (28 unit, 25 integration with a fake
-directory and the real database, 2 login-schema cases), the existing suites
+**Test:** 53 new automated tests (28 unit, 25 integration with a fake
+directory and the real database), the login-schema cases rewritten for the
+username field, and the suite total at 842 from 788 - the existing suites
 unchanged in behaviour, and the E2E suite signing in locally as before. An
 adversarial review of the new code found nine defects; eight were fixed with
-tests and two known races are documented in ARCHITECTURE 25.3.
+tests, and two known races are documented in ARCHITECTURE 25.3.
 
 ---
 
