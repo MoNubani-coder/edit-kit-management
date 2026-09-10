@@ -21,6 +21,12 @@ import { hashPassword, MIN_PASSWORD_LENGTH } from '../../src/server/auth/passwor
  * password) and the break-glass path for the first administrator in a new
  * environment. It refuses to run with NODE_ENV=production unless
  * RESET_PASSWORD_ALLOW_PRODUCTION=true is set explicitly.
+ *
+ * An account linked to the corporate directory has no local password on
+ * purpose. The script refuses to give it one unless
+ * RESET_PASSWORD_ALLOW_DIRECTORY_ACCOUNT=true says that is intended - and
+ * then it also removes the directory link, in the same transaction, so the
+ * account really does move to local sign-in instead of accepting both.
  */
 
 function usage(): never {
@@ -54,16 +60,28 @@ async function main() {
   try {
     const user = await prisma.user.findUnique({
       where: { email },
-      select: { id: true, email: true, status: true, deletedAt: true },
+      select: { id: true, email: true, status: true, deletedAt: true, accounts: { where: { provider: 'ldap' }, select: { id: true } } },
     })
 
     if (!user || user.deletedAt) {
       throw new Error(`No account found for ${email}.`)
     }
 
+    const directoryLinks = user.accounts.length
+    if (directoryLinks > 0 && process.env.RESET_PASSWORD_ALLOW_DIRECTORY_ACCOUNT !== 'true') {
+      throw new Error(
+        `${user.email} signs in through the corporate directory. Setting a local password moves it to local sign-in and unlinks its directory identity. ` +
+          'Set RESET_PASSWORD_ALLOW_DIRECTORY_ACCOUNT=true if that is intended.',
+      )
+    }
+
     const passwordHash = await hashPassword(password)
 
     await prisma.$transaction(async (tx) => {
+      // Otherwise the directory identity would still sign in as this account
+      // by its stable id, and the local password would be a second door.
+      if (directoryLinks > 0) await tx.account.deleteMany({ where: { userId: user.id, provider: 'ldap' } })
+
       await tx.user.update({
         where: { id: user.id },
         data: {
@@ -80,13 +98,16 @@ async function main() {
           entityType: 'User',
           entityId: user.id,
           actorName: 'cli:reset-password',
-          summary: `Password reset for ${user.email} from the command line; all sessions revoked`,
-          metadata: { generated },
+          summary: directoryLinks > 0
+            ? `Password reset for ${user.email} from the command line; corporate directory link removed and all sessions revoked`
+            : `Password reset for ${user.email} from the command line; all sessions revoked`,
+          metadata: { generated, directoryLinksRemoved: directoryLinks },
         },
       })
     })
 
     console.log(`\nPassword reset for ${user.email} (status: ${user.status}). All sessions for this user have been signed out.`)
+    if (directoryLinks > 0) console.log('Its corporate directory link was removed: this account now signs in locally only.')
     if (generated) {
       console.log('\n  The new password is shown ONCE. Copy it now:\n')
       console.log(`  ${password}\n`)

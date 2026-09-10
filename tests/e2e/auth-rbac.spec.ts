@@ -18,7 +18,7 @@ test.describe('authentication', () => {
     await page.goto('/kits')
     await expect(page).toHaveURL(/\/login\?callbackUrl=%2Fkits/)
 
-    await page.getByLabel('Email address').fill(E2E_USERS.engineer.email)
+    await page.getByLabel('Username or email').fill(E2E_USERS.engineer.email)
     await page.getByLabel('Password', { exact: true }).fill(E2E_USERS.engineer.password)
     await page.getByRole('button', { name: 'Sign in' }).click()
 
@@ -28,7 +28,7 @@ test.describe('authentication', () => {
 
   test('a wrong password is refused with one sentence and no hint about which part was wrong', async ({ page }) => {
     await page.goto('/login')
-    await page.getByLabel('Email address').fill(E2E_USERS.engineer.email)
+    await page.getByLabel('Username or email').fill(E2E_USERS.engineer.email)
     await page.getByLabel('Password', { exact: true }).fill('definitely-not-the-password')
     await page.getByRole('button', { name: 'Sign in' }).click()
 

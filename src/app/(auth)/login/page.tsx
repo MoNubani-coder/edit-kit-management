@@ -48,7 +48,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         <div className="mb-7">
           <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-accent-foreground">Welcome back</p>
           <h2 className="mt-1 font-display text-2xl font-semibold tracking-tight text-foreground">Sign in</h2>
-          <p className="mt-1 text-sm text-muted">Use your internal account to continue.</p>
+          <p className="mt-1 text-sm text-muted">Use your corporate or internal account to continue.</p>
         </div>
 
         <LoginForm

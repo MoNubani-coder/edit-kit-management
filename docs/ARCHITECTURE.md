@@ -970,9 +970,9 @@ at the pad, and the name of whoever physically brought the kit back. Both are
 labelled as typed values, both are frozen by the immutability triggers once
 written (`signerMobile` on signatures, `returnedByName` on inspections), and
 neither carries any authority - they name a person, they do not authorise
-anything. LDAP is not implemented: authentication is the Credentials provider
-over bcrypt, and §24.4 lists exactly what an LDAP or Entra integration would
-still need. Nothing in the application pretends otherwise.
+anything. Corporate directory sign-in was added afterwards (AD-33, §25); it
+changes who *authenticates* a person, not where the application takes their
+identity from, which remains the local account behind the session.
 
 ### AD-31 — Software is recorded on the kit, and gates nothing
 
@@ -1017,6 +1017,44 @@ renders no footer at all, because the empty state already says it. The three
 Administration reference tables (categories, software, checklist templates) got
 paged DAL functions, and the row being edited is read directly rather than
 found in the current page, so editing a row on page three still works.
+
+### AD-33 — The directory authenticates; the local account authorises
+
+**Decision.** Corporate sign-in is LDAP / Active Directory, reached through one
+`Directory` interface with one method: authenticate a username and password
+and return a `DirectoryIdentity` (stable id, username, display name, email,
+staff number, group DNs). That identity is resolved to a local `User` row
+through an `Account` link (`provider = 'ldap'`, `providerAccountId` = the
+directory's objectGUID), and the local row is the only thing the session,
+RBAC, audit trail and every "who did this" ever read. Sign-in names that are
+the email of a local account *with a password* take the existing bcrypt path
+and are never sent to the directory; everything else goes to the directory.
+Both methods are switches in configuration, and the process refuses to start
+with both off.
+
+**Why.** The directory knows who somebody is; it does not know what they may
+do in this application, and it must not be asked on every request. Keeping the
+local row as the security record means suspension, role changes and session
+revocation work identically for both kinds of account, RBAC stays one matrix,
+and an outage of the directory is a sign-in problem for directory users and
+nothing else - existing sessions keep working and the emergency administrator
+keeps signing in. Linking by objectGUID rather than by name or email means a
+rename or a mailbox change in the directory does not create a second person
+here, and a reassigned email cannot inherit somebody's history.
+
+**Consequence.** No schema change: the `Account` table was there for this. The
+password is used for exactly one bind and is asserted, in tests, to be absent
+from every row, audit entry, result and token the sign-in writes. Searches use
+an escaped filter confined to the configured user subtree, and names that
+could never be a sign-in name are refused before a connection is opened. The
+transport is always TLS with certificate validation on; there is no option to
+turn it off, and an internal CA is trusted by configuration. Provisioning is
+off by default (an administrator creates the account; the first sign-in links
+it) and, when on, never produces an ADMIN except through an explicitly
+configured ADMIN group. Group-to-role mapping is optional; unmapped people keep
+their local role. Everything the directory changes - a link, a provisioned
+account, a refreshed name, a remapped role - is an audit row attributed to
+"Corporate directory", never to a person who did not act.
 
 ## 6. Folder structure
 
@@ -1492,15 +1530,13 @@ attempts…". The disabled and locked messages are only ever produced after a
 correct password (AD-12). On success Auth.js redirects to the validated
 `callbackUrl` (same-origin path, never `/login`) or `/dashboard`.
 
-### 11.7 Future Entra ID integration point
+### 11.7 Corporate directory sign-in
 
-Add a Microsoft Entra ID provider to the `providers` array in
-`server/auth/auth.ts` and map the directory's group/app-role claim to
-`UserRole` in the `jwt` callback (or, better, look the user up by email and
-take the role from the `users` row so administrators keep control). The
-`Account` table already exists for the adapter, `User.passwordHash` is nullable
-for SSO-only accounts, and `revalidateToken` applies unchanged. No page, action
-or DAL function changes.
+Implemented as LDAP / Active Directory behind the same Credentials provider;
+see §25 and AD-33. The seam predicted here held: the `Account` table is the
+identity link, `User.passwordHash` stays null for directory accounts,
+`revalidateToken` and every page, action and DAL function are unchanged. A
+future Entra ID (OIDC) provider would slot in beside it the same way.
 
 ### 11.8 What is tested
 
@@ -3562,15 +3598,19 @@ functions, so a screen never offers a step the service would refuse.
   to them, and every addition is covered by the same immutability triggers as
   the columns beside it.
 
-### 24.4 LDAP: what is actually there, and what is missing
+### 24.4 LDAP: what was there at the time, and what was missing
 
-Authentication today is Auth.js v5 with a single Credentials provider over
-bcrypt hashes in `users.passwordHash`, plus lockout, session versioning and a
-database-backed session. **There is no LDAP or Entra integration, and none is
-faked** - no bind, no directory read, no "LDAP" label on a local password
-check. The engineer identity on a handover is the authenticated local account.
+*Written on 2026-09-08, before the directory work; kept as the record of the
+gap it described. The pieces listed below were built on 2026-09-09 - see §25
+and AD-33 for what now exists.*
 
-To authenticate against ADM's directory later, these are the pieces that do not
+Authentication at that point was Auth.js v5 with a single Credentials provider
+over bcrypt hashes in `users.passwordHash`, plus lockout, session versioning
+and a database-backed session. There was no LDAP or Entra integration, and
+none was faked. The engineer identity on a handover was, and is, the
+authenticated local account.
+
+To authenticate against ADM's directory, these were the pieces that did not
 exist yet:
 
 1. **A provider.** Either an LDAP bind inside `authorize` (`ldapts` or similar,
@@ -3629,3 +3669,142 @@ exist yet:
   software blockers became warnings, the handover's checklist arrives answered,
   and `prepareChecklistFor` is applied wherever a scenario marks a booking
   ready, exactly as the real flow does.
+
+## 25. Corporate directory sign-in (LDAP / Active Directory)
+
+### 25.1 Shape
+
+```
+Login form ── username + password ──▶ authorize() ── rate limiter
+                                          │
+                                          ▼
+                              signInWithPassword()  (src/server/auth/authenticate.ts)
+                                          │
+              local account with a password? ── yes ──▶ verifyCredentials()  (bcrypt, lockout, unchanged)
+                                          │
+                                          no
+                                          ▼
+                              signInWithDirectory()  (src/server/auth/ldap/authenticate.ts)
+                                          │
+                              Directory.authenticate()  (src/server/auth/ldap/directory.ts, ldapts)
+                                          │  DirectoryIdentity {id, username, displayName, email, staffId, groups}
+                                          ▼
+                    Account(provider='ldap', providerAccountId=id) ─▶ User row
+                    │ none: link by email (no-password account) │ provision (if enabled) │ refuse
+                                          ▼
+                    status ACTIVE? profile refresh, optional group→role, LOGIN_SUCCESS
+                                          ▼
+                              AuthenticatedUser → the same JWT and session as before
+```
+
+Nothing below `authorize()` changed shape: `revalidateToken`, `resolveSession`,
+the `Actor`, the permission matrix, the route policy, the proxy and the login
+page are untouched. The directory is consulted once per sign-in and never
+again for the life of the session.
+
+### 25.1a Two things the transport and the bind have to get right
+
+**The connection.** `ldapts` decides a connection is TLS-from-the-first-byte
+whenever it is given `tlsOptions`, whatever the URL says. So the options are
+handed to the client only for `ldaps://`, and for `ldap://` they are handed to
+`startTLS()` instead (`clientOptionsFor`, `isSecureScheme`). Passing them both
+ways would open a raw TLS socket against port 389, which no directory answers -
+and it would look like an outage rather than a mistake. `env.ts` refuses the
+two schemes combined, and `authenticate()` refuses to send a password over a
+plaintext connection that would not be upgraded, whatever built it.
+
+**The bind.** A successful bind proves the password belongs to the *principal*,
+not to whichever entry a search returned. With a service account the order
+makes those identical - find the entry, then bind as its own DN. With a direct
+bind it does not: Active Directory allows a UPN prefix that is not the
+sAMAccountName, so `jsmith@partner.example.ae` and the account named `jsmith`
+can be two different people. The direct-bind path therefore searches for the
+principal it bound and refuses unless the entry carries that principal
+(`entryIsPrincipal`), rather than signing the person in as a namesake.
+
+### 25.2 Configuration
+
+All settings are validated in `src/lib/env.ts` and read only when
+`AUTH_LDAP_ENABLED=true`. The rules that cannot be per-field live in
+`directoryConfigurationProblems()`: `ldap://` without StartTLS is refused,
+half a service account is refused, no service account and no UPN suffix is
+refused, a filter without `{{username}}` is refused, and switching both
+sign-in methods off is refused. `LDAP_DEFAULT_ROLE` cannot be ADMIN by type.
+None of the directory's real values are known yet; `.env.example` documents
+every variable and `docs/OPERATIONS.md` §6 lists exactly what IT must supply.
+
+### 25.2a The three guards on the email claim
+
+An `Account` row keyed by the directory's stable id is the identity link, but
+the *first* sign-in of an administrator-created account has nothing to match on
+except the email. That claim is allowed once, and only when the account has no
+local password (a break-glass account is never silently converted), has no
+directory link already (an email can be reassigned in the directory; a stable
+id cannot, so a new identity must not inherit somebody else's account) and is
+ACTIVE (an account that cannot sign in does not collect identity bindings from
+refused attempts). Everything the directory then changes - the link, a
+provisioned account, a refreshed name, a remapped role - happens in one
+transaction with its audit rows.
+
+### 25.3 What is deliberately not done
+
+- No LDAP query on page requests, no directory-backed session store, no
+  replacement of `sessionVersion` revocation.
+- No option to accept an invalid certificate, in any environment.
+- No hard-coded group names, hosts, DNs or attribute names beyond Active
+  Directory's conventional defaults, all of which are overridable.
+- No removal of local sign-in: it is the break-glass path, and the seeded
+  development users still use it. The E2E suite signs in locally, so the
+  directory is never a test dependency.
+- No schema migration: the existing `Account` table carries the link.
+- No new transaction isolation level for sign-in. Two known races are left as
+  they are, both matching behaviour that predates this work: (a) two
+  simultaneous sign-ins that each demote an ADMIN by group mapping can both
+  pass the last-active-administrator count, exactly as two concurrent
+  `setUserRole` calls can (`admin.service.ts`); (b) a first sign-in submitted
+  twice at once can lose the check-then-write race on `users.email` and
+  surface as the generic "Sign-in is unavailable right now. Please try again."
+  Both fail safe - no wrong identity, no elevated role, no stack trace to the
+  browser - and both would need an outer retry (a Postgres transaction cannot
+  continue after a failed statement), which is a change to how every action
+  retries rather than to sign-in.
+
+### 25.4 What is tested
+
+Unit (`tests/unit/ldap-directory.test.ts`, 28 tests): filter escaping against
+injection, plausible-name refusal, DOMAIN\user and UPN normalisation,
+requested attributes (binary ones as bytes, and by the spelling Active
+Directory returns whatever the configuration's casing), objectGUID and
+objectSid rendering, entry → identity mapping, group → role precedence, error
+classification, the TLS options going to the client for LDAPS and to
+`startTLS()` for a plaintext upgrade, the refusal to send a password over a
+connection that would not be upgraded, the principal check accepting the bound
+identity and refusing a namesake, the client refusing to connect for an empty
+password, an unreachable server reported as unavailable, a CA file that cannot
+be read reported as misconfiguration, the sentence for every code, and every
+configuration rule including `ldaps://` combined with StartTLS.
+
+Integration (`tests/integration/ldap-auth.test.ts`, real database, fake
+directory): local sign-in unchanged with the directory off; a local
+password-bearing account checked locally with the directory never called (also
+while the directory is down); usernames and emails routed to the directory;
+success linking by stable id with the same token shape as a local sign-in;
+later sign-ins by id with a changed email and a refreshed profile; wrong
+password and unknown user indistinguishable; outage as a bounded failure that
+touches no account; suspended / disabled / invited refused after the directory
+accepted; a local account never claimed by email; provisioning off (refused,
+audited) and on (default role, never ADMIN unless mapped, email clash refused);
+group mapping changing a role with a session-version bump and a ROLE_CHANGED
+row attributed to the directory; the last active administrator never demoted by
+a group, with an audit row saying why; unmapped people untouched; an account
+that already belongs to another directory identity never claimed by email
+after a mailbox is reassigned; a non-ACTIVE placeholder never bound to an
+identity; the refusal row naming the directory username, email and id; the
+local path still bcrypt and still locking. `tests/integration/ldap-identity-flow.test.ts`
+takes a directory-provisioned engineer through booking, handover and return
+and asserts that prepared-by, the engineer signature, handed-over-by and
+received-by are that account under the directory display name, that a stray
+"created by" or engineer nomination in the payload changes nothing, and that a
+refreshed display name carries into new work while frozen documents keep the
+old one. The password is asserted absent from every row, audit entry, result
+and token in each success and failure case.

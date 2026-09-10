@@ -3,23 +3,28 @@ import { describe, expect, it } from 'vitest'
 import { loginFieldErrors, loginSchema, newPasswordSchema } from '@/lib/validation/auth'
 
 describe('login schema', () => {
-  it('normalises the email to lower case and trims it', () => {
-    const parsed = loginSchema.parse({ email: '  Admin@Example.AE ', password: 'x' })
-    expect(parsed.email).toBe('admin@example.ae')
+  it('normalises the sign-in name to lower case and trims it', () => {
+    const parsed = loginSchema.parse({ username: '  Admin@Example.AE ', password: 'x' })
+    expect(parsed.username).toBe('admin@example.ae')
+  })
+
+  it('accepts a corporate username as well as an email, and leaves the difference to the server', () => {
+    expect(loginSchema.parse({ username: 'K.Mansoori', password: 'x' }).username).toBe('k.mansoori')
+    expect(loginSchema.parse({ username: 'CORP\\kmansoori', password: 'x' }).username).toBe('corp\\kmansoori')
   })
 
   it('reports one message per field for an empty submission', () => {
-    const result = loginSchema.safeParse({ email: '', password: '' })
+    const result = loginSchema.safeParse({ username: '', password: '' })
     expect(result.success).toBe(false)
     if (!result.success) {
       const errors = loginFieldErrors(result.error)
-      expect(errors.email).toBeTruthy()
+      expect(errors.username).toBeTruthy()
       expect(errors.password).toBeTruthy()
     }
   })
 
-  it('rejects a malformed email', () => {
-    expect(loginSchema.safeParse({ email: 'not-an-email', password: 'x' }).success).toBe(false)
+  it('caps an absurdly long name rather than passing it on', () => {
+    expect(loginSchema.safeParse({ username: 'a'.repeat(255), password: 'x' }).success).toBe(false)
   })
 })
 

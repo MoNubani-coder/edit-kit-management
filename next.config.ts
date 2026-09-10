@@ -54,7 +54,7 @@ const nextConfig: NextConfig = {
   experimental: { authInterrupts: true },
 
   // Keep Prisma's query engine out of the bundler's dependency graph.
-  serverExternalPackages: ['@prisma/client', 'prisma'],
+  serverExternalPackages: ['@prisma/client', 'prisma', 'ldapts'],
 
   // Uploaded evidence is served through an authorised route handler, never
   // statically, so next/image never needs a remote pattern.

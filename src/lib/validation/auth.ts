@@ -4,20 +4,20 @@ import { z } from 'zod'
  * Zod schemas shared by the login form (client-side hints) and the sign-in
  * server action (the check that counts).
  *
- * Email is normalised to lower case so `Admin@Example.ae` and
- * `admin@example.ae` resolve to the same account. Password is only checked
- * for presence and a sanity cap here - strength rules apply when a password is
- * *set*, never when it is *entered*, or existing users would be locked out by
- * a policy change.
+ * The sign-in name is a corporate username, a user principal name or a local
+ * account's email, so it is only trimmed, capped and lower-cased here - which
+ * of those it is gets decided on the server, never by the form. Password is
+ * only checked for presence and a sanity cap: strength rules apply when a
+ * password is *set*, never when it is *entered*, or existing users would be
+ * locked out by a policy change.
  */
 
 export const loginSchema = z.object({
-  email: z
+  username: z
     .string()
     .trim()
-    .min(1, 'Enter your email address.')
-    .max(254, 'Email address is too long.')
-    .pipe(z.email('Enter a valid email address.'))
+    .min(1, 'Enter your username or email address.')
+    .max(254, 'Username is too long.')
     .transform((value) => value.toLowerCase()),
   password: z.string().min(1, 'Enter your password.').max(1024, 'Password is too long.'),
   callbackUrl: z.string().max(2048).optional(),
@@ -25,7 +25,7 @@ export const loginSchema = z.object({
 
 export type LoginInput = z.infer<typeof loginSchema>
 
-export type LoginFieldErrors = Partial<Record<'email' | 'password', string>>
+export type LoginFieldErrors = Partial<Record<'username' | 'password', string>>
 
 /** Result shape returned by the sign-in server action to `useActionState`. */
 export type LoginFormState =
@@ -46,7 +46,7 @@ export function loginFieldErrors(error: z.ZodError<unknown>): LoginFieldErrors {
   const fieldErrors: LoginFieldErrors = {}
   for (const issue of error.issues) {
     const field = issue.path[0]
-    if ((field === 'email' || field === 'password') && !fieldErrors[field]) {
+    if ((field === 'username' || field === 'password') && !fieldErrors[field]) {
       fieldErrors[field] = issue.message
     }
   }

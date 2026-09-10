@@ -5,10 +5,11 @@ import { AuthError, CredentialsSignin } from 'next-auth'
 import { headers } from 'next/headers'
 
 import { loginFieldErrors, loginSchema, type LoginFormState } from '@/lib/validation/auth'
-import { CREDENTIALS_ERROR_CODES, signIn, signOut } from '@/server/auth/auth'
+import { signIn, signOut } from '@/server/auth/auth'
 import { requestContextFrom } from '@/server/auth/credentials'
 import { LOGIN_PATH, safeRedirectPath } from '@/server/auth/route-policy'
 import { getCurrentUser } from '@/server/auth/session'
+import { messageForSignInCode } from '@/server/auth/sign-in-codes'
 import { prisma } from '@/server/db/prisma'
 import { recordAudit } from '@/server/services/audit.service'
 
@@ -20,14 +21,12 @@ import { recordAudit } from '@/server/services/audit.service'
  * one. Everything else must use the wrapper.
  */
 
-const GENERIC_FAILURE = 'Incorrect email or password.'
-
 export async function signInAction(
   _previous: LoginFormState,
   formData: FormData,
 ): Promise<LoginFormState> {
   const parsed = loginSchema.safeParse({
-    email: formData.get('email'),
+    username: formData.get('username'),
     password: formData.get('password'),
     callbackUrl: formData.get('callbackUrl') ?? undefined,
   })
@@ -40,13 +39,13 @@ export async function signInAction(
     }
   }
 
-  const { email, password, callbackUrl } = parsed.data
+  const { username, password, callbackUrl } = parsed.data
 
   try {
     // On success Auth.js sets the session cookie and throws a redirect, which
     // propagates out of this action to the router.
     await signIn('credentials', {
-      email,
+      username,
       password,
       redirectTo: safeRedirectPath(callbackUrl),
     })
@@ -54,25 +53,7 @@ export async function signInAction(
     if (!(error instanceof AuthError)) throw error
 
     if (error instanceof CredentialsSignin) {
-      switch (error.code) {
-        case CREDENTIALS_ERROR_CODES.disabled:
-          return {
-            status: 'error',
-            message: 'This account is not active. Contact an administrator to restore access.',
-          }
-        case CREDENTIALS_ERROR_CODES.locked:
-          return {
-            status: 'error',
-            message: 'This account is temporarily locked after repeated failed attempts. Try again later.',
-          }
-        case CREDENTIALS_ERROR_CODES.rateLimited:
-          return {
-            status: 'error',
-            message: 'Too many sign-in attempts from this location. Wait a few minutes and try again.',
-          }
-        default:
-          return { status: 'error', message: GENERIC_FAILURE }
-      }
+      return { status: 'error', message: messageForSignInCode(error.code) }
     }
 
     console.error('[auth] sign-in failed', error)

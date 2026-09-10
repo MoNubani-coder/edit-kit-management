@@ -6,7 +6,7 @@ import { E2E_USERS } from '../../scripts/e2e/prepare'
 export async function signIn(page: Page, who: keyof typeof E2E_USERS): Promise<void> {
   const user = E2E_USERS[who]
   await page.goto('/login')
-  await page.getByLabel('Email address').fill(user.email)
+  await page.getByLabel('Username or email').fill(user.email)
   await page.getByLabel('Password', { exact: true }).fill(user.password)
   await page.getByRole('button', { name: 'Sign in' }).click()
   await expect(page).toHaveURL(/\/dashboard/, { timeout: 60_000 })

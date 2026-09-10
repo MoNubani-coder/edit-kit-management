@@ -18,9 +18,11 @@ import { signInAction } from '@/server/actions/auth.actions'
 /**
  * Credentials form.
  *
- * Client-side validation uses the same Zod schema as the server action, but
- * only to save a round-trip - the server re-validates everything. Error copy
- * never distinguishes "no such account" from "wrong password".
+ * One name field takes a corporate username or a local account's email; the
+ * server decides which it is. Client-side validation uses the same Zod schema
+ * as the server action, but only to save a round-trip - the server
+ * re-validates everything. Error copy never distinguishes "no such account"
+ * from "wrong password".
  */
 
 interface LoginFormProps {
@@ -34,7 +36,7 @@ export function LoginForm({ callbackUrl, notice }: LoginFormProps) {
   const [clientErrors, setClientErrors] = useState<LoginFieldErrors>({})
   const [showPassword, setShowPassword] = useState(false)
 
-  const emailId = useId()
+  const usernameId = useId()
   const passwordId = useId()
   const errorId = useId()
 
@@ -45,7 +47,7 @@ export function LoginForm({ callbackUrl, notice }: LoginFormProps) {
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     const data = new FormData(event.currentTarget)
     const parsed = loginSchema.safeParse({
-      email: data.get('email'),
+      username: data.get('username'),
       password: data.get('password'),
     })
 
@@ -70,11 +72,11 @@ export function LoginForm({ callbackUrl, notice }: LoginFormProps) {
       ) : null}
 
       <div className="space-y-1.5">
-        <Label htmlFor={emailId}>Email address</Label>
+        <Label htmlFor={usernameId}>Username or email</Label>
         <Input
-          id={emailId}
-          name="email"
-          type="email"
+          id={usernameId}
+          name="username"
+          type="text"
           inputMode="email"
           autoComplete="username"
           autoCapitalize="none"
@@ -82,13 +84,13 @@ export function LoginForm({ callbackUrl, notice }: LoginFormProps) {
           required
           autoFocus
           disabled={isPending}
-          invalid={Boolean(fieldErrors.email)}
-          aria-describedby={fieldErrors.email ? `${emailId}-error` : undefined}
-          onChange={() => clientErrors.email && setClientErrors((errors) => ({ ...errors, email: undefined }))}
+          invalid={Boolean(fieldErrors.username)}
+          aria-describedby={fieldErrors.username ? `${usernameId}-error` : undefined}
+          onChange={() => clientErrors.username && setClientErrors((errors) => ({ ...errors, username: undefined }))}
         />
-        {fieldErrors.email ? (
-          <p id={`${emailId}-error`} className="text-xs text-rose-600 dark:text-rose-300">
-            {fieldErrors.email}
+        {fieldErrors.username ? (
+          <p id={`${usernameId}-error`} className="text-xs text-rose-600 dark:text-rose-300">
+            {fieldErrors.username}
           </p>
         ) : null}
       </div>

@@ -9,14 +9,17 @@ import { loginSchema } from '@/lib/validation/auth'
 import { prisma } from '@/server/db/prisma'
 
 import { authConfig } from './auth.config'
-import { requestContextFrom, verifyCredentials } from './credentials'
+import { type SignInResult, signInWithPassword } from './authenticate'
+import { requestContextFrom } from './credentials'
 import { loginRateLimiter, loginRateLimitKeys } from './rate-limit'
+import { CREDENTIALS_ERROR_CODES } from './sign-in-codes'
 
 /**
  * The Auth.js instance used by the application (route handler, server
  * components, server actions). Builds on the proxy-safe `authConfig` and adds:
  *
- *  1. The Credentials provider, delegating to `verifyCredentials`, wrapped in
+ *  1. The Credentials provider, delegating to `signInWithPassword` - the local
+ *     bcrypt path or the corporate directory, decided server-side - wrapped in
  *     the login rate limiter. The limiter lives here rather than in the form
  *     action because Auth.js also exposes the credentials callback directly at
  *     /api/auth/callback/credentials; every path into password checking must
@@ -26,18 +29,15 @@ import { loginRateLimiter, loginRateLimitKeys } from './rate-limit'
  *     as the token. Suspending a user or bumping their version signs them out
  *     on their very next request - the kill switch from AD-2.
  *
+ * Whichever way somebody signed in, the session is the same: a local `User`
+ * row's id, name, email, role and sessionVersion. The directory is consulted
+ * once, at sign-in, and never again for the life of the session.
+ *
  * Only `handlers`, `auth`, `signIn` and `signOut` leave this folder. The rest
- * of the application never imports `next-auth` directly, so swapping or adding
- * a provider (Entra ID) is contained here (AD-3).
+ * of the application never imports `next-auth` directly (AD-3).
  */
 
-/** Error codes surfaced to the sign-in action. Never more specific than this. */
-export const CREDENTIALS_ERROR_CODES = {
-  invalid: 'invalid_credentials',
-  disabled: 'account_disabled',
-  locked: 'account_locked',
-  rateLimited: 'rate_limited',
-} as const
+export { CREDENTIALS_ERROR_CODES }
 
 export class InvalidCredentialsError extends CredentialsSignin {
   code = CREDENTIALS_ERROR_CODES.invalid
@@ -57,7 +57,43 @@ export class RateLimitedError extends CredentialsSignin {
   retryAfterSeconds = 0
 }
 
-const credentialsSchema = loginSchema.pick({ email: true, password: true })
+export class AccountNotProvisionedError extends CredentialsSignin {
+  code = CREDENTIALS_ERROR_CODES.notProvisioned
+}
+
+export class DirectoryUnavailableError extends CredentialsSignin {
+  code = CREDENTIALS_ERROR_CODES.directoryUnavailable
+}
+
+export class AuthMisconfiguredError extends CredentialsSignin {
+  code = CREDENTIALS_ERROR_CODES.misconfigured
+}
+
+/**
+ * The typed error for a refused sign-in. Kept as a pure function so the
+ * mapping - which reasons say what - can be tested without Auth.js.
+ */
+export function errorForSignInResult(result: Exclude<SignInResult, { ok: true }>): CredentialsSignin {
+  switch (result.reason) {
+    case 'disabled':
+      return new AccountDisabledError()
+    case 'locked': {
+      const error = new AccountLockedError()
+      error.retryAfterMinutes = result.retryAfterMinutes
+      return error
+    }
+    case 'not_provisioned':
+      return new AccountNotProvisionedError()
+    case 'unavailable':
+      return new DirectoryUnavailableError()
+    case 'misconfigured':
+      return new AuthMisconfiguredError()
+    default:
+      return new InvalidCredentialsError()
+  }
+}
+
+const credentialsSchema = loginSchema.pick({ username: true, password: true })
 
 /**
  * Confirms the account behind a token is still allowed in. Returns the token
@@ -121,9 +157,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
     Credentials({
       id: 'credentials',
-      name: 'Email and password',
+      name: 'Username and password',
       credentials: {
-        email: { label: 'Email', type: 'email' },
+        username: { label: 'Username or email', type: 'text' },
         password: { label: 'Password', type: 'password' },
       },
 
@@ -132,7 +168,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         if (!parsed.success) throw new InvalidCredentialsError()
 
         const context = requestContextFrom(request.headers)
-        const limitKeys = loginRateLimitKeys(context.ipAddress, parsed.data.email)
+        const limitKeys = loginRateLimitKeys(context.ipAddress, parsed.data.username)
 
         const limit = await loginRateLimiter.check(limitKeys)
         if (!limit.allowed) {
@@ -141,7 +177,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           throw error
         }
 
-        const result = await verifyCredentials(prisma, parsed.data, context)
+        const result = await signInWithPassword(prisma, parsed.data, context)
 
         if (result.ok) {
           await loginRateLimiter.reset(limitKeys)
@@ -149,20 +185,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         }
 
         // Only failures that reveal nothing count towards the limit; a correct
-        // password against a disabled or locked account is not an attack.
+        // password against a disabled or locked account is not an attack, and
+        // neither is an outage.
         if (result.reason === 'invalid') await loginRateLimiter.recordFailure(limitKeys)
 
-        switch (result.reason) {
-          case 'disabled':
-            throw new AccountDisabledError()
-          case 'locked': {
-            const error = new AccountLockedError()
-            error.retryAfterMinutes = result.retryAfterMinutes
-            throw error
-          }
-          default:
-            throw new InvalidCredentialsError()
-        }
+        throw errorForSignInResult(result)
       },
     }),
   ],
@@ -174,7 +201,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       const token = await authConfig.callbacks.jwt(params)
       if (!token) return null
 
-      // At sign-in the user row was read milliseconds ago by verifyCredentials.
+      // At sign-in the user row was read milliseconds ago by signInWithPassword.
       if (params.trigger === 'signIn') return token
 
       return revalidateToken(token)

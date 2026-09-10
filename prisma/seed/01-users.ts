@@ -54,7 +54,9 @@ interface UserSpec {
  * it did not set, which is why the credential reports `existing`.
  */
 async function ensureUser(prisma: PrismaClient, spec: UserSpec) {
-  const email = process.env[spec.emailEnvVar] ?? spec.defaultEmail
+  // Every sign-in path lower-cases the name before looking the account up, so
+  // a mixed-case SEED_*_EMAIL has to be stored the way it will be searched for.
+  const email = (process.env[spec.emailEnvVar] ?? spec.defaultEmail).trim().toLowerCase()
 
   const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } })
 

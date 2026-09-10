@@ -335,6 +335,26 @@ amended immutability triggers.
 
 ---
 
+## After the roadmap — corporate directory sign-in ✅ COMPLETE (awaiting commissioning)
+
+Staff can sign in with their LDAP / Active Directory credentials. The directory
+authenticates; the local `User` row - linked by the directory's objectGUID
+through the existing `Account` table - remains the security record for RBAC,
+session revocation, the audit trail and every "prepared by / handed over by /
+received by". Local email + password accounts stay as the break-glass path and
+are checked locally, never sent to the directory. Everything is validated
+configuration with nothing invented: `AUTH_LDAP_ENABLED` is `false` until IT
+supplies the values listed in OPERATIONS.md §6. No migration, no change to the
+session architecture, no LDAP traffic after sign-in.
+
+**Test:** 55 new automated tests (28 unit, 25 integration with a fake
+directory and the real database, 2 login-schema cases), the existing suites
+unchanged in behaviour, and the E2E suite signing in locally as before. An
+adversarial review of the new code found nine defects; eight were fixed with
+tests and two known races are documented in ARCHITECTURE 25.3.
+
+---
+
 ## Sequencing notes
 
 - **Phases 4–6 are independent** and can run in parallel across developers.
